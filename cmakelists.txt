@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.10)
+project(mylang CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(mylang
+    src/main.cpp
+    src/lexer/lexer.cpp
+    src/parser/parser.cpp
+    src/ast/ast_printer.cpp
+    src/interpreter/environment.cpp
+    src/interpreter/interpreter.cpp
+)
+
+target_include_directories(mylang PRIVATE src)

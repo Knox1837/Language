@@ -1,0 +1,37 @@
+# Build output
+build/
+bin/
+out/
+*.o
+*.obj
+*.exe
+*.exe~
+*.out
+*.a
+*.lib
+*.dll
+*.pdb
+*.ilk
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+
+# Editor / IDE
+.vscode/
+!.vscode/c_cpp_properties.json
+.vs/
+*.vcxproj*
+*.sln
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Test scripts
+test.*
