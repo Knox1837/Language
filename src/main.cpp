@@ -1,4 +1,5 @@
-// main.cpp: the entry point to wire the pipeline together: source text -> Lexer -> tokens -> Parser -> AST -> Interpreter -> actual program output.
+// main.cpp: the entry point to wire the pipeline together: 
+//source text -> Lexer -> tokens -> Parser -> AST -> Interpreter -> actual program output
 
 #include <iostream>
 #include <fstream>
@@ -7,16 +8,17 @@
 #include "parser/parser.h"
 #include "interpreter/interpreter.h"
 
-static Interpreter interpreter; // persists across REPL lines so variables survive between them
+static Interpreter interpreter; // persists across REPL lines so variables/functions survive between them
+static std::vector<std::vector<StmtPtr>> allStatements; // keeps every parsed AST alive for the program's lifetime
 
 static void run(const std::string& source) {
     Lexer lexer(source);
     std::vector<Token> tokens = lexer.scanTokens();
 
     Parser parser(tokens);
-    std::vector<StmtPtr> statements = parser.parse();
+    allStatements.push_back(parser.parse());
 
-    interpreter.interpret(statements);
+    interpreter.interpret(allStatements.back());
 }
 
 static void runFile(const std::string& path) {

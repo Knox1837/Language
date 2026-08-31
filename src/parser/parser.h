@@ -1,14 +1,14 @@
-#pragma once
-// parser.h — declares Parser, which consumes the flat Token stream from the Lexer and builds a tree of Stmt/Expr nodes (the AST). 
+// parser.h: declares Parser, which consumes the flat Token stream from the Lexer and builds a tree of Stmt/Expr nodes (the AST). Each grammar
+// rule (defined in parser.cpp) gets its own  method, following standard recursive-descent structure
 
+#pragma once
 #include <vector>
 #include <stdexcept>
 #include "../lexer/token.h"
 #include "../ast/expr.h"
 #include "../ast/stmt.h"
 
-// Thrown internally when a parse rule can't match; caught in synchronize()
-// or at the top level to continue parsing after reporting an error.
+// Thrown internally when a parse rule can't match; caught in synchronize() or at the top level to continue parsing after reporting an error.
 struct ParseError : std::runtime_error {
     ParseError() : std::runtime_error("parse error") {}
 };
@@ -25,12 +25,14 @@ private:
     int current = 0;
 
     // statement grammar rules
-    StmtPtr declaration();      // var declaration, or falls through to statement()
+    StmtPtr declaration();      // "def" function, "var" declaration, or falls through to statement()
+    StmtPtr functionDeclaration(); // "def" IDENTIFIER "(" params? ")" block
     StmtPtr varDeclaration();   // "var" IDENTIFIER ("=" expression)? ";"
-    StmtPtr statement();        // dispatches to printStmt/ifStmt/whileStmt/block/exprStmt
+    StmtPtr statement();        // dispatches to printStmt/ifStmt/whileStmt/returnStmt/block/exprStmt
     StmtPtr printStatement();   // "print" expression ";"
     StmtPtr ifStatement();      // "if" "(" expression ")" statement ("else" statement)?
     StmtPtr whileStatement();   // "while" "(" expression ")" statement
+    StmtPtr returnStatement();  // "return" expression? ";"
     StmtPtr expressionStatement(); // expression ";"
     std::vector<StmtPtr> block();  // "{" declaration* "}"
 
@@ -43,7 +45,9 @@ private:
     ExprPtr comparison();  // -> term ( (">" | ">=" | "<" | "<=") term )*
     ExprPtr term();        // -> factor ( ("-" | "+") factor )*
     ExprPtr factor();      // -> unary ( ("/" | "*") unary )*
-    ExprPtr unary();       // -> ("!" | "-") unary | primary
+    ExprPtr unary();       // -> ("!" | "-") unary | call
+    ExprPtr call();        // -> primary ( "(" arguments? ")" )*
+    ExprPtr finishCall(ExprPtr callee); // parses the argument list once "(" is seen
     ExprPtr primary();     // -> NUMBER | STRING | "true" | "false" | "nil" | "(" expr ")" | IDENTIFIER
 
     // token-stream helpers

@@ -1,11 +1,19 @@
 // Defines Value (reuses the same variant as AST literals) plus isTruthy() and stringifyValue() helpers
 #pragma once
+#include <memory>
 #include "../ast/expr.h"
-using Value = LiteralValue;
+
+class Callable; // defined in callable.h; forward-declared so Value can hold a pointer to it
+
+using Value = std::variant<std::monostate, double, bool, std::string, std::shared_ptr<Callable>>;
+
+// Converts a parse-time LiteralValue (nil/number/bool/string only) into a runtime Value (which has one extra alternative for functions). 
+// Needed because the two variants have different alternative sets, so C++ won't convert between them implicitly.
+inline Value fromLiteral(const LiteralValue& lit) {
+    return std::visit([](auto&& v) -> Value { return v; }, lit);
+}
 
 // True if the value is "truthy" for if/while/and/or purposes.
-// This language's rule: nil and false are falsey, everything else truthy
-// (matches Lox/Ruby-style truthiness, not C's "0 is false").
 inline bool isTruthy(const Value& value) {
     if (std::holds_alternative<std::monostate>(value)) return false;
     if (std::holds_alternative<bool>(value)) return std::get<bool>(value);
@@ -13,16 +21,4 @@ inline bool isTruthy(const Value& value) {
 }
 
 // Converts a runtime value to its printable string form (used by `print`).
-inline std::string stringifyValue(const Value& value) {
-    if (std::holds_alternative<std::monostate>(value)) return "nil";
-    if (std::holds_alternative<bool>(value)) return std::get<bool>(value) ? "true" : "false";
-    if (std::holds_alternative<double>(value)) {
-        double d = std::get<double>(value);
-        // Print whole numbers without a trailing ".0" (e.g. "10" not "10.0")
-        if (d == static_cast<long long>(d)) {
-            return std::to_string(static_cast<long long>(d));
-        }
-        return std::to_string(d);
-    }
-    return std::get<std::string>(value);
-}
+std::string stringifyValue(const Value& value);

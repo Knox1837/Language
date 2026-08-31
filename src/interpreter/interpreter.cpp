@@ -1,6 +1,8 @@
 // interpreter.cpp: walks the AST and actually executes it. Expressions are evaluated to a Value; statements are executed for their side effects (printing, defining variables, branching, looping).
 
 #include "interpreter.h"
+#include "user_function.h"
+#include "return_exception.h"
 #include <iostream>
 #include <cmath>
 
@@ -37,7 +39,7 @@ void Interpreter::executeBlock(const std::vector<StmtPtr>& statements, std::shar
             execute(*stmt);
         }
     } catch (...) {
-        environment = previous; // restore scope even if a runtime error/exception propagates
+        environment = previous; // restore scope even if a runtime error/return propagates
         throw;
     }
     environment = previous;
@@ -46,7 +48,7 @@ void Interpreter::executeBlock(const std::vector<StmtPtr>& statements, std::shar
 // expressions
 
 void Interpreter::visitLiteralExpr(Literal& expr) {
-    result = expr.value;
+    result = fromLiteral(expr.value);
 }
 
 void Interpreter::visitGroupingExpr(Grouping& expr) {
@@ -150,6 +152,29 @@ void Interpreter::visitLogicalExpr(Logical& expr) {
     result = evaluate(*expr.right);
 }
 
+void Interpreter::visitCallExpr(Call& expr) {
+    Value callee = evaluate(*expr.callee);
+
+    std::vector<Value> arguments;
+    arguments.reserve(expr.arguments.size());
+    for (auto& argExpr : expr.arguments) {
+        arguments.push_back(evaluate(*argExpr));
+    }
+
+    if (!std::holds_alternative<std::shared_ptr<Callable>>(callee)) {
+        throw RuntimeError(expr.paren, "Can only call functions.");
+    }
+
+    auto function = std::get<std::shared_ptr<Callable>>(callee);
+    if (static_cast<int>(arguments.size()) != function->arity()) {
+        throw RuntimeError(expr.paren,
+            "Expected " + std::to_string(function->arity()) +
+            " arguments but got " + std::to_string(arguments.size()) + ".");
+    }
+
+    result = function->call(*this, arguments);
+}
+
 // statements
 
 void Interpreter::visitExpressionStmt(ExpressionStmt& stmt) {
@@ -187,7 +212,23 @@ void Interpreter::visitWhileStmt(WhileStmt& stmt) {
     }
 }
 
-// helper
+void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
+    // Capture the CURRENT environment as the closure — this is what lets
+    // the function later see variables from its defining scope even if
+    // called from somewhere else entirely.
+    auto function = std::make_shared<UserFunction>(&stmt, environment);
+    environment->define(stmt.name.lexeme, function);
+}
+
+void Interpreter::visitReturnStmt(ReturnStmt& stmt) {
+    Value value = std::monostate{};
+    if (stmt.value) {
+        value = evaluate(*stmt.value);
+    }
+    throw ReturnException(value); // unwinds back to UserFunction::call()
+}
+
+// helpers
 
 void Interpreter::checkNumberOperand(const Token& op, const Value& operand) {
     if (std::holds_alternative<double>(operand)) return;

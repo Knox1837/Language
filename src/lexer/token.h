@@ -1,4 +1,4 @@
-// 	Defines TokenType enum and Token struct (unchanged from before)
+// 	Defines TokenType enum and Token struct
 #pragma once
 #include <string>
 
@@ -18,7 +18,7 @@ enum class TokenType {
 
     // Keywords
     AND, OR, IF, ELSE, TRUE, FALSE, NIL,
-    FOR, WHILE, FUN, RETURN, VAR, PRINT,
+    FOR, WHILE, DEF, RETURN, VAR, PRINT,
 
     END_OF_FILE
 };

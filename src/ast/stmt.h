@@ -10,6 +10,8 @@ struct VarStmt;
 struct BlockStmt;
 struct IfStmt;
 struct WhileStmt;
+struct FunctionStmt;
+struct ReturnStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -18,6 +20,8 @@ struct StmtVisitor {
     virtual void visitBlockStmt(BlockStmt& stmt) = 0;
     virtual void visitIfStmt(IfStmt& stmt) = 0;
     virtual void visitWhileStmt(WhileStmt& stmt) = 0;
+    virtual void visitFunctionStmt(FunctionStmt& stmt) = 0;
+    virtual void visitReturnStmt(ReturnStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -76,4 +80,23 @@ struct WhileStmt : Stmt {
     WhileStmt(ExprPtr condition, StmtPtr body)
         : condition(std::move(condition)), body(std::move(body)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitWhileStmt(*this); }
+};
+
+// def name(param1, param2) { body }
+struct FunctionStmt : Stmt {
+    Token name;
+    std::vector<Token> params;
+    std::vector<StmtPtr> body;
+    FunctionStmt(Token name, std::vector<Token> params, std::vector<StmtPtr> body)
+        : name(std::move(name)), params(std::move(params)), body(std::move(body)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitFunctionStmt(*this); }
+};
+
+// return expression;   or just   return;  (value may be null -> returns nil)
+struct ReturnStmt : Stmt {
+    Token keyword; // the "return" token, kept for line-number reporting
+    ExprPtr value; // nullptr if bare "return;"
+    ReturnStmt(Token keyword, ExprPtr value)
+        : keyword(std::move(keyword)), value(std::move(value)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitReturnStmt(*this); }
 };

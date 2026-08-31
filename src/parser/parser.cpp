@@ -2,13 +2,20 @@
 // Each rule is one function; a function calls the functions for the rules
 // one level higher in precedence, so precedence is encoded directly in
 // the call structure (classic recursive-descent technique).
+// parser.cpp — implements the grammar below via recursive descent.
+// Each rule is one function; a function calls the functions for the rules
+// one level higher in precedence, so precedence is encoded directly in
+// the call structure (classic recursive-descent technique).
 //
 // program     -> declaration* EOF
-// declaration -> varDecl | statement
+// declaration -> funDecl | varDecl | statement
+// funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
+// parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-// statement   -> exprStmt | printStmt | ifStmt | whileStmt | block
+// statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
+// returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
 // exprStmt    -> expression ";"
 // printStmt   -> "print" expression ";"
@@ -21,7 +28,9 @@
 // comparison  -> term ( ( ">" | ">=" | "<" | "<=" ) term )*
 // term        -> factor ( ( "-" | "+" ) factor )*
 // factor      -> unary ( ( "/" | "*" ) unary )*
-// unary       -> ( "!" | "-" ) unary | primary
+// unary       -> ( "!" | "-" ) unary | call
+// call        -> primary ( "(" arguments? ")" )*
+// arguments   -> expression ( "," expression )*
 // primary     -> NUMBER | STRING | "true" | "false" | "nil"
 //              | "(" expression ")" | IDENTIFIER
 
@@ -42,12 +51,34 @@ std::vector<StmtPtr> Parser::parse() {
 
 StmtPtr Parser::declaration() {
     try {
+        if (match({TokenType::DEF})) return functionDeclaration();
         if (match({TokenType::VAR})) return varDeclaration();
         return statement();
     } catch (const ParseError&) {
         synchronize();
         return nullptr; // caller should skip nulls; kept simple for this stage
     }
+}
+
+StmtPtr Parser::functionDeclaration() {
+    Token name = consume(TokenType::IDENTIFIER, "Expect function name.");
+    consume(TokenType::LEFT_PAREN, "Expect '(' after function name.");
+
+    std::vector<Token> params;
+    if (!check(TokenType::RIGHT_PAREN)) {
+        do {
+            if (params.size() >= 255) {
+                error(peek(), "Can't have more than 255 parameters.");
+            }
+            params.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name."));
+        } while (match({TokenType::COMMA}));
+    }
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
+
+    consume(TokenType::LEFT_BRACE, "Expect '{' before function body.");
+    std::vector<StmtPtr> body = block();
+
+    return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(body));
 }
 
 StmtPtr Parser::varDeclaration() {
@@ -66,6 +97,7 @@ StmtPtr Parser::statement() {
     if (match({TokenType::PRINT})) return printStatement();
     if (match({TokenType::IF})) return ifStatement();
     if (match({TokenType::WHILE})) return whileStatement();
+    if (match({TokenType::RETURN})) return returnStatement();
     if (match({TokenType::LEFT_BRACE})) {
         return std::make_unique<BlockStmt>(block());
     }
@@ -100,6 +132,16 @@ StmtPtr Parser::whileStatement() {
     return std::make_unique<WhileStmt>(std::move(condition), std::move(body));
 }
 
+StmtPtr Parser::returnStatement() {
+    Token keyword = previous();
+    ExprPtr value = nullptr;
+    if (!check(TokenType::SEMICOLON)) {
+        value = expression();
+    }
+    consume(TokenType::SEMICOLON, "Expect ';' after return value.");
+    return std::make_unique<ReturnStmt>(std::move(keyword), std::move(value));
+}
+
 StmtPtr Parser::expressionStatement() {
     ExprPtr expr = expression();
     consume(TokenType::SEMICOLON, "Expect ';' after expression.");
@@ -115,7 +157,7 @@ std::vector<StmtPtr> Parser::block() {
     return statements;
 }
 
-// ---------- expressions ----------
+// expressions
 
 ExprPtr Parser::expression() { return assignment(); }
 
@@ -203,7 +245,37 @@ ExprPtr Parser::unary() {
         ExprPtr right = unary();
         return std::make_unique<Unary>(std::move(op), std::move(right));
     }
-    return primary();
+    return call();
+}
+
+ExprPtr Parser::call() {
+    ExprPtr expr = primary();
+
+    // Loop supports chained calls like abc()() if abc() itself returns a function
+    while (true) {
+        if (match({TokenType::LEFT_PAREN})) {
+            expr = finishCall(std::move(expr));
+        } else {
+            break;
+        }
+    }
+
+    return expr;
+}
+
+ExprPtr Parser::finishCall(ExprPtr callee) {
+    std::vector<ExprPtr> arguments;
+    if (!check(TokenType::RIGHT_PAREN)) {
+        do {
+            if (arguments.size() >= 255) {
+                error(peek(), "Can't have more than 255 arguments.");
+            }
+            arguments.push_back(expression());
+        } while (match({TokenType::COMMA}));
+    }
+
+    Token paren = consume(TokenType::RIGHT_PAREN, "Expect ')' after arguments.");
+    return std::make_unique<Call>(std::move(callee), std::move(paren), std::move(arguments));
 }
 
 ExprPtr Parser::primary() {
@@ -285,7 +357,7 @@ void Parser::synchronize() {
             case TokenType::FOR:
             case TokenType::PRINT:
             case TokenType::VAR:
-            case TokenType::FUN:
+            case TokenType::DEF:
             case TokenType::RETURN:
                 return;
             default:

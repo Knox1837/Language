@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <variant>
+#include <vector>
 #include "../lexer/token.h"
 
 struct Binary;
@@ -12,6 +13,7 @@ struct Unary;
 struct Variable;
 struct Assign;
 struct Logical;
+struct Call;
 
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
@@ -25,6 +27,7 @@ struct ExprVisitor {
     virtual void visitVariableExpr(Variable& expr) = 0;
     virtual void visitAssignExpr(Assign& expr) = 0;
     virtual void visitLogicalExpr(Logical& expr) = 0;
+    virtual void visitCallExpr(Call& expr) = 0;
     virtual ~ExprVisitor() = default;
 };
 
@@ -91,4 +94,14 @@ struct Logical : Expr {
     Logical(ExprPtr left, Token op, ExprPtr right)
         : left(std::move(left)), op(std::move(op)), right(std::move(right)) {}
     void accept(ExprVisitor& visitor) override { visitor.visitLogicalExpr(*this); }
+};
+
+// callee(arg1, arg2, ...)   e.g.  abc(1, 2) `paren` is the closing ')' token, kept only so runtime errors (like "wrong number of arguments") can report a line number
+struct Call : Expr {
+    ExprPtr callee;
+    Token paren;
+    std::vector<ExprPtr> arguments;
+    Call(ExprPtr callee, Token paren, std::vector<ExprPtr> arguments)
+        : callee(std::move(callee)), paren(std::move(paren)), arguments(std::move(arguments)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitCallExpr(*this); }
 };
