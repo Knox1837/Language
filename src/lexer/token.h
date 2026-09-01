@@ -18,7 +18,7 @@ enum class TokenType {
 
     // Keywords
     AND, OR, IF, ELSE, TRUE, FALSE, NIL,
-    FOR, WHILE, DEF, RETURN, VAR, PRINT,
+    FOR, WHILE, DEF, RETURN, VAR, PRINT, CLASS, THIS,
 
     END_OF_FILE
 };

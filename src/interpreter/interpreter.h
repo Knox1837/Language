@@ -7,20 +7,22 @@
 #include "../ast/stmt.h"
 #include "environment.h"
 #include "value.h"
+#include "lox_class.h"
+#include "lox_instance.h"
 
 class Interpreter : public ExprVisitor, public StmtVisitor {
 public:
     Interpreter();
 
     // Entry point: executes a whole program (list of top-level statements).
-    // Catches RuntimeError internally and reports it, matching how a real cript runner behaves (one runtime error stops execution and prints it)
+    // Catches RuntimeError internally and reports it, matching how a real script runner behaves (one runtime error stops execution and prints it).
     void interpret(const std::vector<StmtPtr>& statements);
 
     // Runs `statements` in a fresh scope chained to `newEnv`'s parent chain.
-    // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope
+    // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope.
     void executeBlock(const std::vector<StmtPtr>& statements, std::shared_ptr<Environment> newEnv);
 
-    // expression visitors: each computes a Value and stores it in `result`
+    // --- expression visitors: each computes a Value and stores it in `result` ---
     void visitBinaryExpr(Binary& expr) override;
     void visitGroupingExpr(Grouping& expr) override;
     void visitLiteralExpr(Literal& expr) override;
@@ -29,6 +31,9 @@ public:
     void visitAssignExpr(Assign& expr) override;
     void visitLogicalExpr(Logical& expr) override;
     void visitCallExpr(Call& expr) override;
+    void visitGetExpr(Get& expr) override;
+    void visitSetExpr(Set& expr) override;
+    void visitThisExpr(This& expr) override;
 
     // statement visitors: each performs an action (no return value)
     void visitExpressionStmt(ExpressionStmt& stmt) override;
@@ -39,6 +44,7 @@ public:
     void visitWhileStmt(WhileStmt& stmt) override;
     void visitFunctionStmt(FunctionStmt& stmt) override;
     void visitReturnStmt(ReturnStmt& stmt) override;
+    void visitClassStmt(ClassStmt& stmt) override;
 
 private:
     std::shared_ptr<Environment> environment; // current scope; starts as globals

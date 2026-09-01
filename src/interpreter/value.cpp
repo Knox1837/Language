@@ -3,6 +3,7 @@
 
 #include "value.h"
 #include "callable.h"
+#include "lox_instance.h"
 
 std::string stringifyValue(const Value& value) {
     if (std::holds_alternative<std::monostate>(value)) return "nil";
@@ -17,6 +18,9 @@ std::string stringifyValue(const Value& value) {
     }
     if (std::holds_alternative<std::shared_ptr<Callable>>(value)) {
         return std::get<std::shared_ptr<Callable>>(value)->toString();
+    }
+    if (std::holds_alternative<std::shared_ptr<LoxInstance>>(value)) {
+        return std::get<std::shared_ptr<LoxInstance>>(value)->toString();
     }
     return std::get<std::string>(value);
 }

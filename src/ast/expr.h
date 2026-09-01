@@ -14,6 +14,9 @@ struct Variable;
 struct Assign;
 struct Logical;
 struct Call;
+struct Get;
+struct Set;
+struct This;
 
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
@@ -28,6 +31,9 @@ struct ExprVisitor {
     virtual void visitAssignExpr(Assign& expr) = 0;
     virtual void visitLogicalExpr(Logical& expr) = 0;
     virtual void visitCallExpr(Call& expr) = 0;
+    virtual void visitGetExpr(Get& expr) = 0;
+    virtual void visitSetExpr(Set& expr) = 0;
+    virtual void visitThisExpr(This& expr) = 0;
     virtual ~ExprVisitor() = default;
 };
 
@@ -96,7 +102,9 @@ struct Logical : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitLogicalExpr(*this); }
 };
 
-// callee(arg1, arg2, ...)   e.g.  abc(1, 2) `paren` is the closing ')' token, kept only so runtime errors (like "wrong number of arguments") can report a line number
+// callee(arg1, arg2, ...)   e.g.  abc(1, 2)
+// `paren` is the closing ')' token, kept only so runtime errors (like
+// "wrong number of arguments") can report a line number.
 struct Call : Expr {
     ExprPtr callee;
     Token paren;
@@ -104,4 +112,29 @@ struct Call : Expr {
     Call(ExprPtr callee, Token paren, std::vector<ExprPtr> arguments)
         : callee(std::move(callee)), paren(std::move(paren)), arguments(std::move(arguments)) {}
     void accept(ExprVisitor& visitor) override { visitor.visitCallExpr(*this); }
+};
+
+// object.name   — reads a property (field OR method) off an instance
+struct Get : Expr {
+    ExprPtr object;
+    Token name;
+    Get(ExprPtr object, Token name) : object(std::move(object)), name(std::move(name)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitGetExpr(*this); }
+};
+
+// object.name = value   — writes a field on an instance
+struct Set : Expr {
+    ExprPtr object;
+    Token name;
+    ExprPtr value;
+    Set(ExprPtr object, Token name, ExprPtr value)
+        : object(std::move(object)), name(std::move(name)), value(std::move(value)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitSetExpr(*this); }
+};
+
+// the "this" keyword inside a method body — refers to the current instance
+struct This : Expr {
+    Token keyword;
+    explicit This(Token keyword) : keyword(std::move(keyword)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitThisExpr(*this); }
 };

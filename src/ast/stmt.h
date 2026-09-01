@@ -12,6 +12,7 @@ struct IfStmt;
 struct WhileStmt;
 struct FunctionStmt;
 struct ReturnStmt;
+struct ClassStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -22,6 +23,7 @@ struct StmtVisitor {
     virtual void visitWhileStmt(WhileStmt& stmt) = 0;
     virtual void visitFunctionStmt(FunctionStmt& stmt) = 0;
     virtual void visitReturnStmt(ReturnStmt& stmt) = 0;
+    virtual void visitClassStmt(ClassStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -99,4 +101,13 @@ struct ReturnStmt : Stmt {
     ReturnStmt(Token keyword, ExprPtr value)
         : keyword(std::move(keyword)), value(std::move(value)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitReturnStmt(*this); }
+};
+
+// class Name { method1(...) {...} method2(...) {...} }
+struct ClassStmt : Stmt {
+    Token name;
+    std::vector<std::unique_ptr<FunctionStmt>> methods;
+    ClassStmt(Token name, std::vector<std::unique_ptr<FunctionStmt>> methods)
+        : name(std::move(name)), methods(std::move(methods)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitClassStmt(*this); }
 };

@@ -1,8 +1,9 @@
 // interpreter.cpp: walks the AST and actually executes it. Expressions are evaluated to a Value; statements are executed for their side effects (printing, defining variables, branching, looping).
-
 #include "interpreter.h"
 #include "user_function.h"
 #include "return_exception.h"
+#include "lox_class.h"
+#include "lox_instance.h"
 #include <iostream>
 #include <cmath>
 
@@ -175,6 +176,28 @@ void Interpreter::visitCallExpr(Call& expr) {
     result = function->call(*this, arguments);
 }
 
+void Interpreter::visitGetExpr(Get& expr) {
+    Value object = evaluate(*expr.object);
+    if (!std::holds_alternative<std::shared_ptr<LoxInstance>>(object)) {
+        throw RuntimeError(expr.name, "Only instances have properties.");
+    }
+    result = std::get<std::shared_ptr<LoxInstance>>(object)->get(expr.name);
+}
+
+void Interpreter::visitSetExpr(Set& expr) {
+    Value object = evaluate(*expr.object);
+    if (!std::holds_alternative<std::shared_ptr<LoxInstance>>(object)) {
+        throw RuntimeError(expr.name, "Only instances have fields.");
+    }
+    Value value = evaluate(*expr.value);
+    std::get<std::shared_ptr<LoxInstance>>(object)->set(expr.name, value);
+    result = value; // "a.b = c" is itself an expression, same as plain assignment
+}
+
+void Interpreter::visitThisExpr(This& expr) {
+    result = environment->get(expr.keyword);
+}
+
 // statements
 
 void Interpreter::visitExpressionStmt(ExpressionStmt& stmt) {
@@ -226,6 +249,21 @@ void Interpreter::visitReturnStmt(ReturnStmt& stmt) {
         value = evaluate(*stmt.value);
     }
     throw ReturnException(value); // unwinds back to UserFunction::call()
+}
+
+void Interpreter::visitClassStmt(ClassStmt& stmt) {
+    // Two-step define/assign (like Lox) so a method body could in principle reference the class's own name
+    environment->define(stmt.name.lexeme, std::monostate{});
+
+    std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods;
+    for (auto& methodDecl : stmt.methods) {
+        bool isInitializer = (methodDecl->name.lexeme == "init");
+        auto function = std::make_shared<UserFunction>(methodDecl.get(), environment, isInitializer);
+        methods[methodDecl->name.lexeme] = function;
+    }
+
+    auto klass = std::make_shared<LoxClass>(stmt.name.lexeme, std::move(methods));
+    environment->assign(stmt.name, Value{klass});
 }
 
 // helpers

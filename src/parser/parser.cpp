@@ -1,14 +1,12 @@
-// parser.cpp: implements the grammar below via recursive descent.
-// Each rule is one function; a function calls the functions for the rules
-// one level higher in precedence, so precedence is encoded directly in
-// the call structure (classic recursive-descent technique).
 // parser.cpp — implements the grammar below via recursive descent.
 // Each rule is one function; a function calls the functions for the rules
 // one level higher in precedence, so precedence is encoded directly in
 // the call structure (classic recursive-descent technique).
 //
 // program     -> declaration* EOF
-// declaration -> funDecl | varDecl | statement
+// declaration -> classDecl | funDecl | varDecl | statement
+// classDecl   -> "class" IDENTIFIER "{" function* "}"
+// function    -> IDENTIFIER "(" parameters? ")" block   (a method — no "def" keyword)
 // funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 // parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
@@ -21,7 +19,7 @@
 // printStmt   -> "print" expression ";"
 //
 // expression  -> assignment
-// assignment  -> IDENTIFIER "=" assignment | logicOr
+// assignment  -> ( call "." )? IDENTIFIER "=" assignment | logicOr
 // logicOr     -> logicAnd ( "or" logicAnd )*
 // logicAnd    -> equality ( "and" equality )*
 // equality    -> comparison ( ( "!=" | "==" ) comparison )*
@@ -29,9 +27,9 @@
 // term        -> factor ( ( "-" | "+" ) factor )*
 // factor      -> unary ( ( "/" | "*" ) unary )*
 // unary       -> ( "!" | "-" ) unary | call
-// call        -> primary ( "(" arguments? ")" )*
+// call        -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
 // arguments   -> expression ( "," expression )*
-// primary     -> NUMBER | STRING | "true" | "false" | "nil"
+// primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
 //              | "(" expression ")" | IDENTIFIER
 
 #include "parser.h"
@@ -51,6 +49,7 @@ std::vector<StmtPtr> Parser::parse() {
 
 StmtPtr Parser::declaration() {
     try {
+        if (match({TokenType::CLASS})) return classDeclaration();
         if (match({TokenType::DEF})) return functionDeclaration();
         if (match({TokenType::VAR})) return varDeclaration();
         return statement();
@@ -60,9 +59,22 @@ StmtPtr Parser::declaration() {
     }
 }
 
-StmtPtr Parser::functionDeclaration() {
-    Token name = consume(TokenType::IDENTIFIER, "Expect function name.");
-    consume(TokenType::LEFT_PAREN, "Expect '(' after function name.");
+StmtPtr Parser::classDeclaration() {
+    Token name = consume(TokenType::IDENTIFIER, "Expect class name.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before class body.");
+
+    std::vector<std::unique_ptr<FunctionStmt>> methods;
+    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+        methods.push_back(functionBody("method"));
+    }
+
+    consume(TokenType::RIGHT_BRACE, "Expect '}' after class body.");
+    return std::make_unique<ClassStmt>(std::move(name), std::move(methods));
+}
+
+std::unique_ptr<FunctionStmt> Parser::functionBody(const std::string& kind) {
+    Token name = consume(TokenType::IDENTIFIER, "Expect " + kind + " name.");
+    consume(TokenType::LEFT_PAREN, "Expect '(' after " + kind + " name.");
 
     std::vector<Token> params;
     if (!check(TokenType::RIGHT_PAREN)) {
@@ -75,10 +87,14 @@ StmtPtr Parser::functionDeclaration() {
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
 
-    consume(TokenType::LEFT_BRACE, "Expect '{' before function body.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before " + kind + " body.");
     std::vector<StmtPtr> body = block();
 
     return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(body));
+}
+
+StmtPtr Parser::functionDeclaration() {
+    return functionBody("function");
 }
 
 StmtPtr Parser::varDeclaration() {
@@ -172,6 +188,12 @@ ExprPtr Parser::assignment() {
             Token name = varExpr->name;
             return std::make_unique<Assign>(std::move(name), std::move(value));
         }
+        if (auto* getExpr = dynamic_cast<Get*>(expr.get())) {
+            // "a.b = c" parses as Get(a, b) first (via call()), then gets
+            // reinterpreted as Set here once we see the "=" — same trick
+            // used above for plain variable assignment.
+            return std::make_unique<Set>(std::move(getExpr->object), getExpr->name, std::move(value));
+        }
 
         error(equals, "Invalid assignment target.");
     }
@@ -251,10 +273,13 @@ ExprPtr Parser::unary() {
 ExprPtr Parser::call() {
     ExprPtr expr = primary();
 
-    // Loop supports chained calls like abc()() if abc() itself returns a function
+    // Loop supports chains like abc()() or a.b.c() or a.b().c
     while (true) {
         if (match({TokenType::LEFT_PAREN})) {
             expr = finishCall(std::move(expr));
+        } else if (match({TokenType::DOT})) {
+            Token name = consume(TokenType::IDENTIFIER, "Expect property name after '.'.");
+            expr = std::make_unique<Get>(std::move(expr), std::move(name));
         } else {
             break;
         }
@@ -282,6 +307,7 @@ ExprPtr Parser::primary() {
     if (match({TokenType::FALSE})) return std::make_unique<Literal>(LiteralValue{false});
     if (match({TokenType::TRUE})) return std::make_unique<Literal>(LiteralValue{true});
     if (match({TokenType::NIL})) return std::make_unique<Literal>(LiteralValue{std::monostate{}});
+    if (match({TokenType::THIS})) return std::make_unique<This>(previous());
 
     if (match({TokenType::NUMBER})) {
         double value = std::stod(previous().lexeme);
@@ -358,6 +384,7 @@ void Parser::synchronize() {
             case TokenType::PRINT:
             case TokenType::VAR:
             case TokenType::DEF:
+            case TokenType::CLASS:
             case TokenType::RETURN:
                 return;
             default:

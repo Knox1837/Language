@@ -8,9 +8,8 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
     {"nil", TokenType::NIL}, {"for", TokenType::FOR},
     {"while", TokenType::WHILE}, {"def", TokenType::DEF},
     {"return", TokenType::RETURN}, {"var", TokenType::VAR},
-    {"print", TokenType::PRINT},
+    {"print", TokenType::PRINT}, {"class", TokenType::CLASS}, {"this", TokenType::THIS},
 };
-
 Lexer::Lexer(std::string source) : source(std::move(source)) {}
 
 std::vector<Token> Lexer::scanTokens() {

@@ -1,6 +1,7 @@
 # mylang — Language Specification
 
-Status: Development
+Status: living document. Update this whenever a language feature changes.
+Last covers: lexer, parser, tree-walking interpreter, functions & closures.
 
 ## Overview
 
@@ -13,6 +14,7 @@ declarations (`def`, no return-type annotations).
 ```
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
+class     this
 ```
 
 ## Data types
@@ -24,6 +26,8 @@ or        print     return    true      var       while     def
 | bool   | `true`, `false`| |
 | nil    | `nil`          | absence of a value; also the default for `var x;` with no initializer, and for a function with no `return` |
 | function | `def f() {}` | first-class: can be assigned, passed, and returned |
+| class  | `class C {}`   | first-class: calling a class constructs an instance |
+| instance | (result of calling a class) | holds fields, created dynamically on first assignment |
 
 ## Truthiness
 
@@ -48,7 +52,9 @@ No `%` (modulo) operator yet.
 
 ```
 program     -> declaration* EOF
-declaration -> funDecl | varDecl | statement
+declaration -> classDecl | funDecl | varDecl | statement
+classDecl   -> "class" IDENTIFIER "{" method* "}"
+method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
@@ -61,7 +67,7 @@ exprStmt    -> expression ";"
 printStmt   -> "print" expression ";"
 
 expression  -> assignment
-assignment  -> IDENTIFIER "=" assignment | logicOr
+assignment  -> ( call "." )? IDENTIFIER "=" assignment | logicOr
 logicOr     -> logicAnd ( "or" logicAnd )*
 logicAnd    -> equality ( "and" equality )*
 equality    -> comparison ( ( "!=" | "==" ) comparison )*
@@ -69,9 +75,9 @@ comparison  -> term ( ( ">" | ">=" | "<" | "<=" ) term )*
 term        -> factor ( ( "-" | "+" ) factor )*
 factor      -> unary ( ( "/" | "*" ) unary )*
 unary       -> ( "!" | "-" ) unary | call
-call        -> primary ( "(" arguments? ")" )*
+call        -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
 arguments   -> expression ( "," expression )*
-primary     -> NUMBER | STRING | "true" | "false" | "nil"
+primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
              | "(" expression ")" | IDENTIFIER
 ```
 
@@ -115,18 +121,46 @@ print counter(); // 1
 print counter(); // 2
 ```
 
+## Classes
+
+```
+class Counter {
+    init() {
+        this.count = 0;
+    }
+    increment() {
+        this.count = this.count + 1;
+        return this.count;
+    }
+}
+var c = Counter();
+print c.increment(); // 1
+print c.increment(); // 2
+```
+
+- Methods are declared **without** the `def` keyword inside a class body.
+- `init()` is the constructor convention: called automatically when the
+  class is invoked (`Counter()`), and always returns `this` regardless
+  of what it explicitly returns (matches Lox/Python's `__init__`).
+- Fields are dynamic — not declared up front, just created on first
+  assignment (`this.count = 0`), same as Python's `self.x = ...`.
+- Each instance has independent state; separate `Counter()` calls don't
+  share fields.
+- No inheritance yet (see below).
+
 ## Error handling
 
 - **Parse errors** (e.g. `Expect ';' after value.`) are reported with
   a line number; the parser attempts to recover (`synchronize()`) and
   continue reporting further errors instead of stopping at the first one.
 - **Runtime errors** (undefined variable, type mismatch, division by
-  zero, wrong argument count, calling a non-function) are reported with
-  a line number and halt execution of that script/REPL line.
+  zero, wrong argument count, calling a non-function, accessing a
+  property on a non-instance, undefined property) are reported with a
+  line number and halt execution of that script/REPL line.
 
 ## Not yet implemented
 
-- Classes / objects / inheritance
+- Inheritance / superclasses
 - `%` modulo, compound assignment (`+=` etc.)
 - Arrays / lists, maps
 - A standard library (no built-in functions at all currently — not even a way to get the time or read input)

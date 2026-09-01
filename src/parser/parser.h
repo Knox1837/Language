@@ -1,6 +1,5 @@
 // parser.h: declares Parser, which consumes the flat Token stream from the Lexer and builds a tree of Stmt/Expr nodes (the AST). Each grammar
 // rule (defined in parser.cpp) gets its own  method, following standard recursive-descent structure
-
 #pragma once
 #include <vector>
 #include <stdexcept>
@@ -8,7 +7,7 @@
 #include "../ast/expr.h"
 #include "../ast/stmt.h"
 
-// Thrown internally when a parse rule can't match; caught in synchronize() or at the top level to continue parsing after reporting an error.
+// Thrown internally when a parse rule can't match; caught in synchronize()  or at the top level to continue parsing after reporting an error.
 struct ParseError : std::runtime_error {
     ParseError() : std::runtime_error("parse error") {}
 };
@@ -25,8 +24,10 @@ private:
     int current = 0;
 
     // statement grammar rules
-    StmtPtr declaration();      // "def" function, "var" declaration, or falls through to statement()
-    StmtPtr functionDeclaration(); // "def" IDENTIFIER "(" params? ")" block
+    StmtPtr declaration();      // "class" decl, "def" function, "var" declaration, or falls through to statement()
+    StmtPtr classDeclaration(); // "class" IDENTIFIER "{" function* "}"
+    std::unique_ptr<FunctionStmt> functionBody(const std::string& kind); // shared by top-level "def" and class methods
+    StmtPtr functionDeclaration(); // "def" IDENTIFIER "(" params? ")" block -- wraps functionBody()
     StmtPtr varDeclaration();   // "var" IDENTIFIER ("=" expression)? ";"
     StmtPtr statement();        // dispatches to printStmt/ifStmt/whileStmt/returnStmt/block/exprStmt
     StmtPtr printStatement();   // "print" expression ";"
@@ -46,7 +47,7 @@ private:
     ExprPtr term();        // -> factor ( ("-" | "+") factor )*
     ExprPtr factor();      // -> unary ( ("/" | "*") unary )*
     ExprPtr unary();       // -> ("!" | "-") unary | call
-    ExprPtr call();        // -> primary ( "(" arguments? ")" )*
+    ExprPtr call();        // -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
     ExprPtr finishCall(ExprPtr callee); // parses the argument list once "(" is seen
     ExprPtr primary();     // -> NUMBER | STRING | "true" | "false" | "nil" | "(" expr ")" | IDENTIFIER
 

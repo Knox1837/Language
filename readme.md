@@ -4,7 +4,7 @@
 
 **With g++ directly:**
 ```bash
-g++ -std=c++17 -Isrc src/main.cpp src/lexer/lexer.cpp src/parser/parser.cpp src/interpreter/environment.cpp src/interpreter/interpreter.cpp src/interpreter/user_function.cpp src/interpreter/value.cpp -o mylang
+g++ -std=c++17 -Isrc src/main.cpp src/lexer/lexer.cpp src/parser/parser.cpp src/interpreter/environment.cpp src/interpreter/interpreter.cpp src/interpreter/user_function.cpp src/interpreter/value.cpp src/interpreter/lox_class.cpp src/interpreter/lox_instance.cpp -o mylang
 ```
 
 **With CMake:**
@@ -26,5 +26,4 @@ cmake --build build
 ```
 
 ## Docs
-
 See `docs/language-spec.md` for the language grammar/semantics

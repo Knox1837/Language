@@ -13,6 +13,8 @@ add_executable(mylang
     src/interpreter/interpreter.cpp
     src/interpreter/user_function.cpp
     src/interpreter/value.cpp
+    src/interpreter/lox_class.cpp
+    src/interpreter/lox_instance.cpp
 )
 
 target_include_directories(mylang PRIVATE src)
