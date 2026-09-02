@@ -11,8 +11,10 @@ class LoxClass : public Callable, public std::enable_shared_from_this<LoxClass> 
 public:
     std::string name;
 
-    LoxClass(std::string name, std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods);
-    // Looks up a method by name on this class. Returns nullptr if not found
+    LoxClass(std::string name, std::shared_ptr<LoxClass> superclass,
+             std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods);
+
+    // Looks up a method by name, checking this class first, then walking up the superclass chain if not found locally.
     std::shared_ptr<UserFunction> findMethod(const std::string& methodName);
 
     int arity() const override;   // arity of init() if defined, else 0
@@ -20,5 +22,6 @@ public:
     std::string toString() const override;
 
 private:
+    std::shared_ptr<LoxClass> superclass; // nullptr if this class has no "< Superclass" clause
     std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods;
 };

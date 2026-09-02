@@ -22,7 +22,7 @@ public:
     // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope.
     void executeBlock(const std::vector<StmtPtr>& statements, std::shared_ptr<Environment> newEnv);
 
-    // --- expression visitors: each computes a Value and stores it in `result` ---
+    // expression visitors: each computes a Value and stores it in `result`
     void visitBinaryExpr(Binary& expr) override;
     void visitGroupingExpr(Grouping& expr) override;
     void visitLiteralExpr(Literal& expr) override;
@@ -34,6 +34,7 @@ public:
     void visitGetExpr(Get& expr) override;
     void visitSetExpr(Set& expr) override;
     void visitThisExpr(This& expr) override;
+    void visitSuperExpr(Super& expr) override;
 
     // statement visitors: each performs an action (no return value)
     void visitExpressionStmt(ExpressionStmt& stmt) override;

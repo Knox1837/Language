@@ -2,12 +2,18 @@
 #include "lox_class.h"
 #include "lox_instance.h"
 
-LoxClass::LoxClass(std::string name, std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods)
-    : name(std::move(name)), methods(std::move(methods)) {}
+LoxClass::LoxClass(std::string name, std::shared_ptr<LoxClass> superclass,
+                    std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods)
+    : name(std::move(name)), superclass(std::move(superclass)), methods(std::move(methods)) {}
 
 std::shared_ptr<UserFunction> LoxClass::findMethod(const std::string& methodName) {
     auto it = methods.find(methodName);
     if (it != methods.end()) return it->second;
+
+    if (superclass) {
+        return superclass->findMethod(methodName); // not found locally — try the parent class
+    }
+
     return nullptr;
 }
 

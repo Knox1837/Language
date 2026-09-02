@@ -1,5 +1,6 @@
-// ast_printer.h — a small ExprVisitor/StmtVisitor implementation that converts the AST back into a readable, parenthesized string, e.g. "1 + 2 * 3" prints as "(+ 1 (* 2 3))". 
-
+// ast_printer.h — a small ExprVisitor/StmtVisitor implementation that converts the AST back into a readable, parenthesized string
+// e.g. "1 + 2 * 3" prints as "(+ 1 (* 2 3))". 
+// to see the AST structure, not the original source code. Useful for debugging the parser.
 #pragma once
 #include <string>
 #include <sstream>
@@ -18,6 +19,11 @@ public:
     void visitVariableExpr(Variable& expr) override;
     void visitAssignExpr(Assign& expr) override;
     void visitLogicalExpr(Logical& expr) override;
+    void visitCallExpr(Call& expr) override;
+    void visitGetExpr(Get& expr) override;
+    void visitSetExpr(Set& expr) override;
+    void visitThisExpr(This& expr) override;
+    void visitSuperExpr(Super& expr) override;
 
     void visitExpressionStmt(ExpressionStmt& stmt) override;
     void visitPrintStmt(PrintStmt& stmt) override;
@@ -25,6 +31,9 @@ public:
     void visitBlockStmt(BlockStmt& stmt) override;
     void visitIfStmt(IfStmt& stmt) override;
     void visitWhileStmt(WhileStmt& stmt) override;
+    void visitFunctionStmt(FunctionStmt& stmt) override;
+    void visitReturnStmt(ReturnStmt& stmt) override;
+    void visitClassStmt(ClassStmt& stmt) override;
 
 private:
     std::string result; // visit methods write here; print() reads it back out

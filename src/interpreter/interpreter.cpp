@@ -252,22 +252,59 @@ void Interpreter::visitReturnStmt(ReturnStmt& stmt) {
 }
 
 void Interpreter::visitClassStmt(ClassStmt& stmt) {
-    // Two-step define/assign (like Lox) so a method body could in principle reference the class's own name
+    // Evaluate the superclass expression (if any) and check it's actually a class.
+    std::shared_ptr<LoxClass> superclass = nullptr;
+    if (stmt.superclass) {
+        Value superclassValue = evaluate(*stmt.superclass);
+        if (std::holds_alternative<std::shared_ptr<Callable>>(superclassValue)) {
+            superclass = std::dynamic_pointer_cast<LoxClass>(std::get<std::shared_ptr<Callable>>(superclassValue));
+        }
+        if (!superclass) {
+            auto* superVar = dynamic_cast<Variable*>(stmt.superclass.get());
+            throw RuntimeError(superVar->name, "Superclass must be a class.");
+        }
+    }
+
+    // Two-step define/assign (like Lox) so a method body could in principle reference the class's own name.
     environment->define(stmt.name.lexeme, std::monostate{});
+
+    // If there's a superclass, methods are defined in a scope one level above their normal closure, with "super" bound in it 
+    std::shared_ptr<Environment> methodEnv = environment;
+    if (superclass) {
+        methodEnv = std::make_shared<Environment>(environment);
+        methodEnv->define("super", Value{std::static_pointer_cast<Callable>(superclass)});
+    }
 
     std::unordered_map<std::string, std::shared_ptr<UserFunction>> methods;
     for (auto& methodDecl : stmt.methods) {
         bool isInitializer = (methodDecl->name.lexeme == "init");
-        auto function = std::make_shared<UserFunction>(methodDecl.get(), environment, isInitializer);
+        auto function = std::make_shared<UserFunction>(methodDecl.get(), methodEnv, isInitializer);
         methods[methodDecl->name.lexeme] = function;
     }
 
-    auto klass = std::make_shared<LoxClass>(stmt.name.lexeme, std::move(methods));
+    auto klass = std::make_shared<LoxClass>(stmt.name.lexeme, superclass, std::move(methods));
     environment->assign(stmt.name, Value{klass});
 }
 
-// helpers
+void Interpreter::visitSuperExpr(Super& expr) {
+    // "super" and "this" were bound at different points in the scope chain (super one level above the method's own closure, this one level below it via bind()) 
+    //both are just found by walking upward, since neither name is ever shadowed by user code
+    Value superclassValue = environment->get(expr.keyword);
+    auto superclass = std::dynamic_pointer_cast<LoxClass>(std::get<std::shared_ptr<Callable>>(superclassValue));
 
+    Token thisToken(TokenType::THIS, "this", expr.keyword.line);
+    Value instanceValue = environment->get(thisToken);
+    auto instance = std::get<std::shared_ptr<LoxInstance>>(instanceValue);
+
+    auto method = superclass->findMethod(expr.method.lexeme);
+    if (!method) {
+        throw RuntimeError(expr.method, "Undefined property '" + expr.method.lexeme + "'.");
+    }
+
+    result = method->bind(instance);
+}
+
+// helpers
 void Interpreter::checkNumberOperand(const Token& op, const Value& operand) {
     if (std::holds_alternative<double>(operand)) return;
     throw RuntimeError(op, "Operand must be a number.");

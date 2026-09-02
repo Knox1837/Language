@@ -1,7 +1,8 @@
 # mylang — Language Specification
 
 Status: living document. Update this whenever a language feature changes.
-Last covers: lexer, parser, tree-walking interpreter, functions & closures.
+Currently covers: lexer, parser, tree-walking interpreter, functions &
+closures, classes, inheritance.
 
 ## Overview
 
@@ -14,7 +15,7 @@ declarations (`def`, no return-type annotations).
 ```
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
-class     this
+class     this      super
 ```
 
 ## Data types
@@ -53,7 +54,7 @@ No `%` (modulo) operator yet.
 ```
 program     -> declaration* EOF
 declaration -> classDecl | funDecl | varDecl | statement
-classDecl   -> "class" IDENTIFIER "{" method* "}"
+classDecl   -> "class" IDENTIFIER ( "<" IDENTIFIER )? "{" method* "}"
 method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
@@ -78,7 +79,7 @@ unary       -> ( "!" | "-" ) unary | call
 call        -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
 arguments   -> expression ( "," expression )*
 primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
-             | "(" expression ")" | IDENTIFIER
+             | "(" expression ")" | IDENTIFIER | "super" "." IDENTIFIER
 ```
 
 ## Scoping
@@ -146,7 +147,45 @@ print c.increment(); // 2
   assignment (`this.count = 0`), same as Python's `self.x = ...`.
 - Each instance has independent state; separate `Counter()` calls don't
   share fields.
-- No inheritance yet (see below).
+
+## Inheritance
+
+```
+class Animal {
+    init(name) {
+        this.name = name;
+    }
+    speak() {
+        print this.name + " makes a sound.";
+    }
+}
+
+class Dog < Animal {
+    speak() {
+        print this.name + " barks.";
+    }
+    describe() {
+        super.speak();   // calls Animal's speak()
+        this.speak();    // calls Dog's own (overridden) speak()
+    }
+}
+
+var d = Dog("Rex");
+d.describe();
+```
+
+- `class Dog < Animal` declares `Dog` as a subclass of `Animal`.
+- A subclass inherits all methods (including `init()`) it doesn't
+  override.
+- `super.method()` calls the named method from the superclass,
+  bypassing any override in the current class — usable from inside any
+  method, most commonly to extend rather than fully replace inherited
+  behavior.
+- Multi-level inheritance works (`class Puppy < Dog` inherits from `Dog`,
+  which inherits from `Animal`).
+- The `< Superclass` expression must evaluate to an actual class;
+  attempting to inherit from a non-class value is a runtime error
+  ("Superclass must be a class.").
 
 ## Error handling
 
@@ -155,12 +194,12 @@ print c.increment(); // 2
   continue reporting further errors instead of stopping at the first one.
 - **Runtime errors** (undefined variable, type mismatch, division by
   zero, wrong argument count, calling a non-function, accessing a
-  property on a non-instance, undefined property) are reported with a
-  line number and halt execution of that script/REPL line.
+  property on a non-instance, undefined property, invalid superclass)
+  are reported with a line number and halt execution of that script/REPL
+  line.
 
 ## Not yet implemented
 
-- Inheritance / superclasses
 - `%` modulo, compound assignment (`+=` etc.)
 - Arrays / lists, maps
 - A standard library (no built-in functions at all currently — not even a way to get the time or read input)

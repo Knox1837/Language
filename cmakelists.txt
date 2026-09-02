@@ -18,3 +18,10 @@ add_executable(mylang
 )
 
 target_include_directories(mylang PRIVATE src)
+
+# copy exe to the project root
+add_custom_command(TARGET mylang POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:mylang>
+        ${CMAKE_SOURCE_DIR}/mylang${CMAKE_EXECUTABLE_SUFFIX}
+)

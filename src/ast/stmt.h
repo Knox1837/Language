@@ -106,8 +106,9 @@ struct ReturnStmt : Stmt {
 // class Name { method1(...) {...} method2(...) {...} }
 struct ClassStmt : Stmt {
     Token name;
+    ExprPtr superclass; // nullptr if no "< Superclass" clause; always a Variable expr, resolved at runtime
     std::vector<std::unique_ptr<FunctionStmt>> methods;
-    ClassStmt(Token name, std::vector<std::unique_ptr<FunctionStmt>> methods)
-        : name(std::move(name)), methods(std::move(methods)) {}
+    ClassStmt(Token name, ExprPtr superclass, std::vector<std::unique_ptr<FunctionStmt>> methods)
+        : name(std::move(name)), superclass(std::move(superclass)), methods(std::move(methods)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitClassStmt(*this); }
 };

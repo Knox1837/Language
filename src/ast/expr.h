@@ -17,6 +17,7 @@ struct Call;
 struct Get;
 struct Set;
 struct This;
+struct Super;
 
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
@@ -34,6 +35,7 @@ struct ExprVisitor {
     virtual void visitGetExpr(Get& expr) = 0;
     virtual void visitSetExpr(Set& expr) = 0;
     virtual void visitThisExpr(This& expr) = 0;
+    virtual void visitSuperExpr(Super& expr) = 0;
     virtual ~ExprVisitor() = default;
 };
 
@@ -137,4 +139,13 @@ struct This : Expr {
     Token keyword;
     explicit This(Token keyword) : keyword(std::move(keyword)) {}
     void accept(ExprVisitor& visitor) override { visitor.visitThisExpr(*this); }
+};
+
+// super.method: calls a method from the superclass, bypassing any override in the current class. 
+// `keyword` is the "super" token itself kept for error line-numbers); `method` is the method name after the dot.
+struct Super : Expr {
+    Token keyword;
+    Token method;
+    Super(Token keyword, Token method) : keyword(std::move(keyword)), method(std::move(method)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitSuperExpr(*this); }
 };

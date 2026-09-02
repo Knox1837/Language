@@ -1,3 +1,4 @@
+// ast_printer.cpp: implements ASTPrinter, a visitor that prints the AST in a Lisp-like parenthesized format
 #include "ast_printer.h"
 
 std::string ASTPrinter::print(Expr& expr) {
@@ -51,6 +52,32 @@ void ASTPrinter::visitLogicalExpr(Logical& expr) {
     result = parenthesize(expr.op.lexeme, *expr.left, *expr.right);
 }
 
+void ASTPrinter::visitCallExpr(Call& expr) {
+    std::ostringstream out;
+    out << "(call " << print(*expr.callee);
+    for (auto& arg : expr.arguments) {
+        out << " " << print(*arg);
+    }
+    out << ")";
+    result = out.str();
+}
+
+void ASTPrinter::visitGetExpr(Get& expr) {
+    result = "(get " + print(*expr.object) + " " + expr.name.lexeme + ")";
+}
+
+void ASTPrinter::visitSetExpr(Set& expr) {
+    result = "(set " + print(*expr.object) + " " + expr.name.lexeme + " " + print(*expr.value) + ")";
+}
+
+void ASTPrinter::visitThisExpr(This&) {
+    result = "this";
+}
+
+void ASTPrinter::visitSuperExpr(Super& expr) {
+    result = "(super " + expr.method.lexeme + ")";
+}
+
 void ASTPrinter::visitExpressionStmt(ExpressionStmt& stmt) {
     result = parenthesize("expr", *stmt.expression);
 }
@@ -97,5 +124,40 @@ void ASTPrinter::visitWhileStmt(WhileStmt& stmt) {
     out << "(while " << print(*stmt.condition);
     stmt.body->accept(*this);
     out << " " << result << ")";
+    result = out.str();
+}
+
+void ASTPrinter::visitFunctionStmt(FunctionStmt& stmt) {
+    std::ostringstream out;
+    out << "(def " << stmt.name.lexeme << " (";
+    for (size_t i = 0; i < stmt.params.size(); i++) {
+        if (i > 0) out << " ";
+        out << stmt.params[i].lexeme;
+    }
+    out << ") ";
+    for (auto& s : stmt.body) {
+        if (!s) continue;
+        s->accept(*this);
+        out << result << " ";
+    }
+    out << ")";
+    result = out.str();
+}
+
+void ASTPrinter::visitReturnStmt(ReturnStmt& stmt) {
+    if (stmt.value) {
+        result = parenthesize("return", *stmt.value);
+    } else {
+        result = "(return)";
+    }
+}
+
+void ASTPrinter::visitClassStmt(ClassStmt& stmt) {
+    std::ostringstream out;
+    out << "(class " << stmt.name.lexeme << " ";
+    for (auto& method : stmt.methods) {
+        out << "(method " << method->name.lexeme << ") ";
+    }
+    out << ")";
     result = out.str();
 }

@@ -61,6 +61,13 @@ StmtPtr Parser::declaration() {
 
 StmtPtr Parser::classDeclaration() {
     Token name = consume(TokenType::IDENTIFIER, "Expect class name.");
+
+    ExprPtr superclass = nullptr;
+    if (match({TokenType::LESS})) {
+        consume(TokenType::IDENTIFIER, "Expect superclass name.");
+        superclass = std::make_unique<Variable>(previous());
+    }
+
     consume(TokenType::LEFT_BRACE, "Expect '{' before class body.");
 
     std::vector<std::unique_ptr<FunctionStmt>> methods;
@@ -69,7 +76,7 @@ StmtPtr Parser::classDeclaration() {
     }
 
     consume(TokenType::RIGHT_BRACE, "Expect '}' after class body.");
-    return std::make_unique<ClassStmt>(std::move(name), std::move(methods));
+    return std::make_unique<ClassStmt>(std::move(name), std::move(superclass), std::move(methods));
 }
 
 std::unique_ptr<FunctionStmt> Parser::functionBody(const std::string& kind) {
@@ -189,9 +196,7 @@ ExprPtr Parser::assignment() {
             return std::make_unique<Assign>(std::move(name), std::move(value));
         }
         if (auto* getExpr = dynamic_cast<Get*>(expr.get())) {
-            // "a.b = c" parses as Get(a, b) first (via call()), then gets
-            // reinterpreted as Set here once we see the "=" — same trick
-            // used above for plain variable assignment.
+            // "a.b = c" parses as Get(a, b) first (via call()), then gets reinterpreted as Set here once we see the "=": same trick used above for plain variable assignment.
             return std::make_unique<Set>(std::move(getExpr->object), getExpr->name, std::move(value));
         }
 
@@ -308,6 +313,13 @@ ExprPtr Parser::primary() {
     if (match({TokenType::TRUE})) return std::make_unique<Literal>(LiteralValue{true});
     if (match({TokenType::NIL})) return std::make_unique<Literal>(LiteralValue{std::monostate{}});
     if (match({TokenType::THIS})) return std::make_unique<This>(previous());
+
+    if (match({TokenType::SUPER})) {
+        Token keyword = previous();
+        consume(TokenType::DOT, "Expect '.' after 'super'.");
+        Token method = consume(TokenType::IDENTIFIER, "Expect superclass method name.");
+        return std::make_unique<Super>(std::move(keyword), std::move(method));
+    }
 
     if (match({TokenType::NUMBER})) {
         double value = std::stod(previous().lexeme);
