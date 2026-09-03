@@ -2,7 +2,7 @@
 
 Status: living document. Update this whenever a language feature changes.
 Currently covers: lexer, parser, tree-walking interpreter, functions &
-closures, classes, inheritance.
+closures, classes, inheritance, standard library.
 
 ## Overview
 
@@ -187,6 +187,28 @@ d.describe();
   attempting to inherit from a non-class value is a runtime error
   ("Superclass must be a class.").
 
+## Standard library
+
+A small set of native (C++-implemented) built-in functions are available
+globally in every script — no import needed.
+
+| Function | Signature | Notes |
+|---|---|---|
+| `clock()` | `clock()` | CPU time in seconds since program start |
+| `abs(x)` | number → number | |
+| `sqrt(x)` | number → number | error if `x < 0` |
+| `pow(x, y)` | number, number → number | |
+| `floor(x)` / `ceil(x)` / `round(x)` | number → number | |
+| `len(s)` | string → number | string length |
+| `upper(s)` / `lower(s)` | string → string | |
+| `substring(s, start, end)` | string, number, number → string | end-exclusive, like Python's `s[start:end]` |
+| `str(x)` | any → string | converts any value to its string form |
+| `input()` | () → string | reads one line from stdin; returns `""` on EOF (no prompt argument — print your own prompt first) |
+
+Native functions raise the same `RuntimeError` mechanism as the rest of
+the interpreter, but since they aren't tied to a specific AST node, their
+error messages report line `0` rather than the calling line.
+
 ## Error handling
 
 - **Parse errors** (e.g. `Expect ';' after value.`) are reported with
@@ -202,5 +224,4 @@ d.describe();
 
 - `%` modulo, compound assignment (`+=` etc.)
 - Arrays / lists, maps
-- A standard library (no built-in functions at all currently — not even a way to get the time or read input)
 - Bytecode VM (current implementation is a tree-walking interpreter)

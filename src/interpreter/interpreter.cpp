@@ -1,14 +1,17 @@
-// interpreter.cpp: walks the AST and actually executes it. Expressions are evaluated to a Value; statements are executed for their side effects (printing, defining variables, branching, looping).
+// interpreter.cpp: walks the AST and actually executes it. 
+// Expressions are evaluated to a Value; statements are executed for their side effects (printing, defining variables, branching, looping).
 #include "interpreter.h"
 #include "user_function.h"
 #include "return_exception.h"
 #include "lox_class.h"
 #include "lox_instance.h"
+#include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
 
 Interpreter::Interpreter() {
     environment = std::make_shared<Environment>(); // the global scope
+    registerStdlib(environment); // clock, abs, sqrt, len, upper, input, etc.
 }
 
 void Interpreter::interpret(const std::vector<StmtPtr>& statements) {
@@ -236,9 +239,7 @@ void Interpreter::visitWhileStmt(WhileStmt& stmt) {
 }
 
 void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
-    // Capture the CURRENT environment as the closure — this is what lets
-    // the function later see variables from its defining scope even if
-    // called from somewhere else entirely.
+    // Capture the CURRENT environment as the closure: this is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
     auto function = std::make_shared<UserFunction>(&stmt, environment);
     environment->define(stmt.name.lexeme, function);
 }
@@ -268,7 +269,8 @@ void Interpreter::visitClassStmt(ClassStmt& stmt) {
     // Two-step define/assign (like Lox) so a method body could in principle reference the class's own name.
     environment->define(stmt.name.lexeme, std::monostate{});
 
-    // If there's a superclass, methods are defined in a scope one level above their normal closure, with "super" bound in it 
+    // If there's a superclass, methods are defined in a scope one level above their normal closure, with "super" bound in it
+    //this is the same trick UserFunction::bind() uses for "this", just for the class as a whole rather than per-instance.
     std::shared_ptr<Environment> methodEnv = environment;
     if (superclass) {
         methodEnv = std::make_shared<Environment>(environment);
