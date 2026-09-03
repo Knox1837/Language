@@ -1,7 +1,6 @@
-// Defines Value (reuses the same variant as AST literals) plus isTruthy() and stringifyValue() helpers
 #pragma once
-// value.h — the runtime Value type. Extends the AST's LiteralValue with
-// two more alternatives: a callable (function/class) and an instance.
+// value.h: the runtime Value type. 
+// Extends the AST's LiteralValue with two more alternatives: a callable (function/class) and an instance.
 // A Value is always one of nil / number / bool / string / callable / instance.
 
 #include <memory>
@@ -9,8 +8,11 @@
 
 class Callable;     // callable.h — functions AND classes (calling a class constructs an instance)
 class LoxInstance;   // lox_instance.h — a runtime object with fields, created from a class
+class ArrayObject;   // array_object.h — a runtime array, holding a vector<Value>
 
-using Value = std::variant<std::monostate, double, bool, std::string, std::shared_ptr<Callable>, std::shared_ptr<LoxInstance>>;
+using Value = std::variant<std::monostate, double, bool, std::string,
+                            std::shared_ptr<Callable>, std::shared_ptr<LoxInstance>,
+                            std::shared_ptr<ArrayObject>>;
 
 // Converts a parse-time LiteralValue (nil/number/bool/string only) into a runtime Value (which has extra alternatives for functions/instances).
 // Needed because the two variants have different alternative sets, so C++ won't convert between them implicitly.
@@ -25,5 +27,5 @@ inline bool isTruthy(const Value& value) {
     return true;
 }
 
-// Converts a runtime value to its printable string form (used by `print`)
+// Converts a runtime value to its printable string form (used by `print`).
 std::string stringifyValue(const Value& value);

@@ -1,10 +1,10 @@
-// 	Defines TokenType enum and Token struct
 #pragma once
 #include <string>
 
 enum class TokenType {
     // Single-character
     LEFT_PAREN, RIGHT_PAREN, LEFT_BRACE, RIGHT_BRACE,
+    LEFT_BRACKET, RIGHT_BRACKET,
     COMMA, DOT, MINUS, PLUS, SEMICOLON, SLASH, STAR,
 
     // One or two character
