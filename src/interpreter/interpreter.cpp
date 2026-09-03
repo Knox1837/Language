@@ -5,6 +5,7 @@
 #include "return_exception.h"
 #include "lox_class.h"
 #include "lox_instance.h"
+#include "array_object.h"
 #include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
@@ -239,7 +240,7 @@ void Interpreter::visitWhileStmt(WhileStmt& stmt) {
 }
 
 void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
-    // Capture the CURRENT environment as the closure: this is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
+    // Capture the CURRENT environment as the closure: this is what lets the function later see variables from its defining scope even if called from somewhere else entirely
     auto function = std::make_shared<UserFunction>(&stmt, environment);
     environment->define(stmt.name.lexeme, function);
 }
@@ -306,7 +307,59 @@ void Interpreter::visitSuperExpr(Super& expr) {
     result = method->bind(instance);
 }
 
+void Interpreter::visitArrayLiteralExpr(ArrayLiteral& expr) {
+    auto array = std::make_shared<ArrayObject>();
+    array->elements.reserve(expr.elements.size());
+    for (auto& elementExpr : expr.elements) {
+        array->elements.push_back(evaluate(*elementExpr));
+    }
+    result = array;
+}
+
+void Interpreter::visitIndexExpr(Index& expr) {
+    Value objectValue = evaluate(*expr.object);
+    Value indexValue = evaluate(*expr.indexExpr);
+
+    if (!std::holds_alternative<std::shared_ptr<ArrayObject>>(objectValue)) {
+        throw RuntimeError(expr.bracket, "Only arrays can be indexed.");
+    }
+    if (!std::holds_alternative<double>(indexValue)) {
+        throw RuntimeError(expr.bracket, "Array index must be a number.");
+    }
+
+    auto array = std::get<std::shared_ptr<ArrayObject>>(objectValue);
+    int index = static_cast<int>(std::get<double>(indexValue));
+    if (index < 0 || index >= static_cast<int>(array->elements.size())) {
+        throw RuntimeError(expr.bracket, "Array index out of range.");
+    }
+
+    result = array->elements[index];
+}
+
+void Interpreter::visitIndexSetExpr(IndexSet& expr) {
+    Value objectValue = evaluate(*expr.object);
+    Value indexValue = evaluate(*expr.indexExpr);
+    Value newValue = evaluate(*expr.value);
+
+    if (!std::holds_alternative<std::shared_ptr<ArrayObject>>(objectValue)) {
+        throw RuntimeError(expr.bracket, "Only arrays can be indexed.");
+    }
+    if (!std::holds_alternative<double>(indexValue)) {
+        throw RuntimeError(expr.bracket, "Array index must be a number.");
+    }
+
+    auto array = std::get<std::shared_ptr<ArrayObject>>(objectValue);
+    int index = static_cast<int>(std::get<double>(indexValue));
+    if (index < 0 || index >= static_cast<int>(array->elements.size())) {
+        throw RuntimeError(expr.bracket, "Array index out of range.");
+    }
+
+    array->elements[index] = newValue;
+    result = newValue; // index-assignment is itself an expression, like plain assignment
+}
+
 // helpers
+
 void Interpreter::checkNumberOperand(const Token& op, const Value& operand) {
     if (std::holds_alternative<double>(operand)) return;
     throw RuntimeError(op, "Operand must be a number.");

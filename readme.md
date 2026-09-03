@@ -4,7 +4,7 @@
 
 **With g++ directly:**
 ```bash
-g++ -std=c++17 -Isrc src/main.cpp src/lexer/lexer.cpp src/parser/parser.cpp src/interpreter/environment.cpp src/interpreter/interpreter.cpp src/interpreter/user_function.cpp src/interpreter/value.cpp src/interpreter/lox_class.cpp src/interpreter/lox_instance.cpp src/stdlib/native_function.cpp src/stdlib/math_lib.cpp src/stdlib/string_lib.cpp src/stdlib/io_lib.cpp src/stdlib/stdlib.cpp -o mylang
+g++ -std=c++17 -Isrc src/main.cpp src/lexer/lexer.cpp src/parser/parser.cpp src/interpreter/environment.cpp src/interpreter/interpreter.cpp src/interpreter/user_function.cpp src/interpreter/value.cpp src/interpreter/lox_class.cpp src/interpreter/lox_instance.cpp src/stdlib/native_function.cpp src/stdlib/math_lib.cpp src/stdlib/string_lib.cpp src/stdlib/io_lib.cpp src/stdlib/array_lib.cpp src/stdlib/stdlib.cpp -o mylang
 ```
 
 **With CMake:**

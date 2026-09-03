@@ -196,8 +196,13 @@ ExprPtr Parser::assignment() {
             return std::make_unique<Assign>(std::move(name), std::move(value));
         }
         if (auto* getExpr = dynamic_cast<Get*>(expr.get())) {
-            // "a.b = c" parses as Get(a, b) first (via call()), then gets reinterpreted as Set here once we see the "=": same trick used above for plain variable assignment.
+            // "a.b = c" parses as Get(a, b) first (via call()), then gets reinterpreted as Set here once we see the "=" same trick used for plain variable assignment
             return std::make_unique<Set>(std::move(getExpr->object), getExpr->name, std::move(value));
+        }
+        if (auto* indexExpr = dynamic_cast<Index*>(expr.get())) {
+            // "a[i] = c" parses as Index(a, i) first, then reinterpreted as IndexSet here: same trick as Get/Set above
+            return std::make_unique<IndexSet>(std::move(indexExpr->object), indexExpr->bracket,
+                                               std::move(indexExpr->indexExpr), std::move(value));
         }
 
         error(equals, "Invalid assignment target.");
@@ -278,13 +283,18 @@ ExprPtr Parser::unary() {
 ExprPtr Parser::call() {
     ExprPtr expr = primary();
 
-    // Loop supports chains like abc()() or a.b.c() or a.b().c
+    // Loop supports chains like abc()() or a.b.c() or a.b().c or arr[0][1]
     while (true) {
         if (match({TokenType::LEFT_PAREN})) {
             expr = finishCall(std::move(expr));
         } else if (match({TokenType::DOT})) {
             Token name = consume(TokenType::IDENTIFIER, "Expect property name after '.'.");
             expr = std::make_unique<Get>(std::move(expr), std::move(name));
+        } else if (match({TokenType::LEFT_BRACKET})) {
+            Token bracket = previous();
+            ExprPtr indexExpr = expression();
+            consume(TokenType::RIGHT_BRACKET, "Expect ']' after index.");
+            expr = std::make_unique<Index>(std::move(expr), std::move(bracket), std::move(indexExpr));
         } else {
             break;
         }
@@ -338,6 +348,17 @@ ExprPtr Parser::primary() {
         ExprPtr expr = expression();
         consume(TokenType::RIGHT_PAREN, "Expect ')' after expression.");
         return std::make_unique<Grouping>(std::move(expr));
+    }
+
+    if (match({TokenType::LEFT_BRACKET})) {
+        std::vector<ExprPtr> elements;
+        if (!check(TokenType::RIGHT_BRACKET)) {
+            do {
+                elements.push_back(expression());
+            } while (match({TokenType::COMMA}));
+        }
+        consume(TokenType::RIGHT_BRACKET, "Expect ']' after array elements.");
+        return std::make_unique<ArrayLiteral>(std::move(elements));
     }
 
     throw error(peek(), "Expect expression.");

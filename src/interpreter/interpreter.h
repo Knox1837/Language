@@ -15,11 +15,9 @@ public:
     Interpreter();
 
     // Entry point: executes a whole program (list of top-level statements).
-    // Catches RuntimeError internally and reports it, matching how a real script runner behaves (one runtime error stops execution and prints it).
     void interpret(const std::vector<StmtPtr>& statements);
 
     // Runs `statements` in a fresh scope chained to `newEnv`'s parent chain.
-    // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope.
     void executeBlock(const std::vector<StmtPtr>& statements, std::shared_ptr<Environment> newEnv);
 
     // expression visitors: each computes a Value and stores it in `result`
@@ -35,6 +33,9 @@ public:
     void visitSetExpr(Set& expr) override;
     void visitThisExpr(This& expr) override;
     void visitSuperExpr(Super& expr) override;
+    void visitArrayLiteralExpr(ArrayLiteral& expr) override;
+    void visitIndexExpr(Index& expr) override;
+    void visitIndexSetExpr(IndexSet& expr) override;
 
     // statement visitors: each performs an action (no return value)
     void visitExpressionStmt(ExpressionStmt& stmt) override;

@@ -7,7 +7,7 @@
 #include "../ast/expr.h"
 #include "../ast/stmt.h"
 
-// Thrown internally when a parse rule can't match; caught in synchronize()  or at the top level to continue parsing after reporting an error.
+// Thrown internally when a parse rule can't match; caught in synchronize() or at the top level to continue parsing after reporting an error
 struct ParseError : std::runtime_error {
     ParseError() : std::runtime_error("parse error") {}
 };
@@ -47,7 +47,7 @@ private:
     ExprPtr term();        // -> factor ( ("-" | "+") factor )*
     ExprPtr factor();      // -> unary ( ("/" | "*") unary )*
     ExprPtr unary();       // -> ("!" | "-") unary | call
-    ExprPtr call();        // -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
+    ExprPtr call();        // -> primary ( "(" arguments? ")" | "." IDENTIFIER | "[" expression "]" )*
     ExprPtr finishCall(ExprPtr callee); // parses the argument list once "(" is seen
     ExprPtr primary();     // -> NUMBER | STRING | "true" | "false" | "nil" | "(" expr ")" | IDENTIFIER
 

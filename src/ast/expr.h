@@ -1,5 +1,15 @@
-// expr.h — defines every kind of EXPRESSION node in the AST (things that produce a value: 1 + 2, x, "hello", (a == b), x = 5, etc).
+// expr.h: defines every kind of EXPRESSION node in the AST (things that produce a value: 1 + 2, x, "hello", (a == b), x = 5, etc).
 #pragma once
+// expr.h - defines every kind of EXPRESSION node in the AST (things that
+// produce a value: 1 + 2, x, "hello", (a == b), x = 5, etc).
+//
+// Uses the Visitor pattern: each node type implements accept(), and any
+// new operation (interpreter, AST printer, compiler) implements
+// ExprVisitor without touching these node classes again. Because C++
+// doesn't allow virtual template methods, the visitor's visit() methods
+// return void - a visitor stores its result internally and the caller
+// reads it back out after accept() runs (see ASTPrinter for an example).
+
 #include <memory>
 #include <string>
 #include <variant>
@@ -18,11 +28,14 @@ struct Get;
 struct Set;
 struct This;
 struct Super;
+struct ArrayLiteral;
+struct Index;
+struct IndexSet;
 
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
 
-// Visitor interface — one visit method per expression type.
+// Visitor interface - one visit method per expression type.
 struct ExprVisitor {
     virtual void visitBinaryExpr(Binary& expr) = 0;
     virtual void visitGroupingExpr(Grouping& expr) = 0;
@@ -36,6 +49,9 @@ struct ExprVisitor {
     virtual void visitSetExpr(Set& expr) = 0;
     virtual void visitThisExpr(This& expr) = 0;
     virtual void visitSuperExpr(Super& expr) = 0;
+    virtual void visitArrayLiteralExpr(ArrayLiteral& expr) = 0;
+    virtual void visitIndexExpr(Index& expr) = 0;
+    virtual void visitIndexSetExpr(IndexSet& expr) = 0;
     virtual ~ExprVisitor() = default;
 };
 
@@ -57,7 +73,7 @@ struct Binary : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitBinaryExpr(*this); }
 };
 
-// ( expression )  — just wraps an inner expr to override precedence
+// ( expression )  - just wraps an inner expr to override precedence
 struct Grouping : Expr {
     ExprPtr expression;
     explicit Grouping(ExprPtr expression) : expression(std::move(expression)) {}
@@ -86,7 +102,7 @@ struct Variable : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitVariableExpr(*this); }
 };
 
-// name = value   — assigning to an existing variable
+// name = value   - assigning to an existing variable
 struct Assign : Expr {
     Token name;
     ExprPtr value;
@@ -94,7 +110,7 @@ struct Assign : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitAssignExpr(*this); }
 };
 
-// left AND right / left OR right — short-circuiting, so kept separate from Binary
+// left AND right / left OR right - short-circuiting, so kept separate from Binary
 struct Logical : Expr {
     ExprPtr left;
     Token op;
@@ -105,8 +121,7 @@ struct Logical : Expr {
 };
 
 // callee(arg1, arg2, ...)   e.g.  abc(1, 2)
-// `paren` is the closing ')' token, kept only so runtime errors (like
-// "wrong number of arguments") can report a line number.
+// `paren` is the closing ')' token, kept only so runtime errors (like "wrong number of arguments") can report a line number.
 struct Call : Expr {
     ExprPtr callee;
     Token paren;
@@ -116,7 +131,7 @@ struct Call : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitCallExpr(*this); }
 };
 
-// object.name   — reads a property (field OR method) off an instance
+// object.name   - reads a property (field OR method) off an instance
 struct Get : Expr {
     ExprPtr object;
     Token name;
@@ -124,7 +139,7 @@ struct Get : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitGetExpr(*this); }
 };
 
-// object.name = value   — writes a field on an instance
+// object.name = value   - writes a field on an instance
 struct Set : Expr {
     ExprPtr object;
     Token name;
@@ -134,7 +149,7 @@ struct Set : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitSetExpr(*this); }
 };
 
-// the "this" keyword inside a method body — refers to the current instance
+// the "this" keyword inside a method body - refers to the current instance
 struct This : Expr {
     Token keyword;
     explicit This(Token keyword) : keyword(std::move(keyword)) {}
@@ -142,10 +157,40 @@ struct This : Expr {
 };
 
 // super.method: calls a method from the superclass, bypassing any override in the current class. 
-// `keyword` is the "super" token itself kept for error line-numbers); `method` is the method name after the dot.
+// `keyword` is the "super" token itself (kept for error line-numbers); `method` is the method name after the dot.
 struct Super : Expr {
     Token keyword;
     Token method;
     Super(Token keyword, Token method) : keyword(std::move(keyword)), method(std::move(method)) {}
     void accept(ExprVisitor& visitor) override { visitor.visitSuperExpr(*this); }
+};
+
+// [expr1, expr2, ...] - an array literal
+struct ArrayLiteral : Expr {
+    std::vector<ExprPtr> elements;
+    explicit ArrayLiteral(std::vector<ExprPtr> elements) : elements(std::move(elements)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitArrayLiteralExpr(*this); }
+};
+
+// object[index]: reads an element out of an array
+// `bracket` is the '[' token, kept only for error line-numbers.
+struct Index : Expr {
+    ExprPtr object;
+    Token bracket;
+    ExprPtr indexExpr;
+    Index(ExprPtr object, Token bracket, ExprPtr indexExpr)
+        : object(std::move(object)), bracket(std::move(bracket)), indexExpr(std::move(indexExpr)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitIndexExpr(*this); }
+};
+
+// object[index] = value   - writes an element into an array
+struct IndexSet : Expr {
+    ExprPtr object;
+    Token bracket;
+    ExprPtr indexExpr;
+    ExprPtr value;
+    IndexSet(ExprPtr object, Token bracket, ExprPtr indexExpr, ExprPtr value)
+        : object(std::move(object)), bracket(std::move(bracket)),
+          indexExpr(std::move(indexExpr)), value(std::move(value)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitIndexSetExpr(*this); }
 };

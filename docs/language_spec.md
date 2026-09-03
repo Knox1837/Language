@@ -1,8 +1,8 @@
-# mylang — Language Specification
+# mylang: Language Specification
 
 Status: living document. Update this whenever a language feature changes.
 Currently covers: lexer, parser, tree-walking interpreter, functions &
-closures, classes, inheritance, standard library.
+closures, classes, inheritance, standard library, arrays.
 
 ## Overview
 
@@ -29,6 +29,7 @@ class     this      super
 | function | `def f() {}` | first-class: can be assigned, passed, and returned |
 | class  | `class C {}`   | first-class: calling a class constructs an instance |
 | instance | (result of calling a class) | holds fields, created dynamically on first assignment |
+| array  | `[1, 2, 3]`    | reference type — assigning or passing an array shares the same underlying data, like instances |
 
 ## Truthiness
 
@@ -46,6 +47,7 @@ where `0` is falsey.)
 | Equality   | `== !=` | works across any two values; different types are never equal |
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |
+| Indexing   | `arr[i]`, `arr[i] = x` | both are expressions; index-assignment returns the assigned value |
 
 No `%` (modulo) operator yet.
 
@@ -68,7 +70,7 @@ exprStmt    -> expression ";"
 printStmt   -> "print" expression ";"
 
 expression  -> assignment
-assignment  -> ( call "." )? IDENTIFIER "=" assignment | logicOr
+assignment  -> ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) "=" assignment | logicOr
 logicOr     -> logicAnd ( "or" logicAnd )*
 logicAnd    -> equality ( "and" equality )*
 equality    -> comparison ( ( "!=" | "==" ) comparison )*
@@ -76,10 +78,11 @@ comparison  -> term ( ( ">" | ">=" | "<" | "<=" ) term )*
 term        -> factor ( ( "-" | "+" ) factor )*
 factor      -> unary ( ( "/" | "*" ) unary )*
 unary       -> ( "!" | "-" ) unary | call
-call        -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
+call        -> primary ( "(" arguments? ")" | "." IDENTIFIER | "[" expression "]" )*
 arguments   -> expression ( "," expression )*
 primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
              | "(" expression ")" | IDENTIFIER | "super" "." IDENTIFIER
+             | "[" ( expression ( "," expression )* )? "]"
 ```
 
 ## Scoping
@@ -178,14 +181,40 @@ d.describe();
 - A subclass inherits all methods (including `init()`) it doesn't
   override.
 - `super.method()` calls the named method from the superclass,
-  bypassing any override in the current class — usable from inside any
-  method, most commonly to extend rather than fully replace inherited
-  behavior.
+  bypassing any override in the current class.
 - Multi-level inheritance works (`class Puppy < Dog` inherits from `Dog`,
   which inherits from `Animal`).
 - The `< Superclass` expression must evaluate to an actual class;
   attempting to inherit from a non-class value is a runtime error
   ("Superclass must be a class.").
+
+## Arrays
+
+```
+var arr = [1, 2, 3];
+print arr[0];        // 1
+arr[1] = 99;
+print arr;           // [1, 99, 3]
+
+var grid = [[1, 2], [3, 4]];
+print grid[0][1];    // 2
+```
+
+- Array literals: `[expr, expr, ...]`, any mix of value types allowed.
+- Indexing (`arr[i]`) and index-assignment (`arr[i] = x`) are both
+  expressions; index-assignment returns the assigned value.
+- Index must be a number; out-of-range or non-array indexing are
+  runtime errors.
+- **Reference semantics**: an array is a `shared_ptr` under the hood,
+  same as class instances. Assigning an array to another variable, or
+  passing it to a function, shares the same underlying data — mutating
+  it through one name is visible through the other:
+  ```
+  var a = [1, 2, 3];
+  var b = a;
+  push(b, 4);
+  print a; // [1, 2, 3, 4] -- a sees b's mutation
+  ```
 
 ## Standard library
 
@@ -204,6 +233,10 @@ globally in every script — no import needed.
 | `substring(s, start, end)` | string, number, number → string | end-exclusive, like Python's `s[start:end]` |
 | `str(x)` | any → string | converts any value to its string form |
 | `input()` | () → string | reads one line from stdin; returns `""` on EOF (no prompt argument — print your own prompt first) |
+| `push(arr, x)` | array, any → number | appends in place, returns new length |
+| `pop(arr)` | array → any | removes & returns the last element; error if empty |
+| `length(arr)` | array → number | number of elements (separate from `len`, which is string-only) |
+| `contains(arr, x)` | array, any → bool | true if `x` appears anywhere in the array |
 
 Native functions raise the same `RuntimeError` mechanism as the rest of
 the interpreter, but since they aren't tied to a specific AST node, their
@@ -216,12 +249,13 @@ error messages report line `0` rather than the calling line.
   continue reporting further errors instead of stopping at the first one.
 - **Runtime errors** (undefined variable, type mismatch, division by
   zero, wrong argument count, calling a non-function, accessing a
-  property on a non-instance, undefined property, invalid superclass)
-  are reported with a line number and halt execution of that script/REPL
-  line.
+  property on a non-instance, undefined property, invalid superclass,
+  array index out of range/wrong type) are reported with a line number
+  and halt execution of that script/REPL line.
 
 ## Not yet implemented
 
 - `%` modulo, compound assignment (`+=` etc.)
-- Arrays / lists, maps
+- Maps / dictionaries
+- An import/module system (everything currently lives in one global scope)
 - Bytecode VM (current implementation is a tree-walking interpreter)
