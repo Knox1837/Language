@@ -20,6 +20,7 @@ add_executable(mylang
     src/stdlib/string_lib.cpp
     src/stdlib/io_lib.cpp
     src/stdlib/array_lib.cpp
+    src/stdlib/type_lib.cpp
     src/stdlib/stdlib.cpp
 )
 
