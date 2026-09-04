@@ -4,10 +4,12 @@
 #include "string_lib.h"
 #include "io_lib.h"
 #include "array_lib.h"
+#include "type_lib.h"
 
 void registerStdlib(std::shared_ptr<Environment> globals) {
     registerMathLib(globals);
     registerStringLib(globals);
     registerIoLib(globals);
     registerArrayLib(globals);
+    registerTypeLib(globals);
 }
