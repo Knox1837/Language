@@ -61,9 +61,10 @@ method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
+statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt | block
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt   -> "while" "(" expression ")" statement
+forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
 returnStmt  -> "return" expression? ";"
 block       -> "{" declaration* "}"
 exprStmt    -> expression ";"
@@ -94,6 +95,38 @@ primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
   This means nested functions correctly retain access to outer
   variables even after the outer function has returned (see example
   below).
+
+## For loops
+
+C-style three-clause `for`, desugared by the parser into an equivalent `while` loop (no dedicated interpreter support needed):
+
+```
+for (var i = 0; i < 5; i = i + 1) {
+    print i;
+}
+```
+
+- All three clauses are optional: `for (;;) { ... }` is an infinite loop.
+- The initializer clause may be a `var` declaration (scoped to the loop,
+  including its body) or any expression statement (e.g. reusing an
+  existing variable: `for (i = 0; ...; ...)`), or omitted entirely.
+- The condition, if omitted, defaults to `true`.
+- The increment runs after each iteration of the body, including when
+  the body uses `return` to exit a surrounding function... but note
+  there is currently no `break`/`continue`, so the only ways to leave a
+  `for` loop early are the condition becoming false or a `return`.
+- Because `for` desugars to `while`, the loop variable is a single
+  mutable binding shared across iterations (not a fresh binding per
+  iteration): a closure created inside the loop body and called after
+  the loop sees the loop variable's *final* value, e.g.:
+  ```
+  var fns = [];
+  for (var i = 0; i < 3; i = i + 1) {
+      def make() { return i; }
+      push(fns, make);
+  }
+  print fns[0](); // 3, not 0 -- all three closures share the same `i`
+  ```
 
 ## Functions
 
@@ -302,6 +335,7 @@ error messages report line `0` rather than the calling line.
 
 ## Not yet implemented
 
+- `break` / `continue` (relevant now that `for` and `while` loops exist)
 - `%` modulo, compound assignment (`+=` etc.)
 - Maps / dictionaries
 - Method-call syntax on arrays (`arr.push(x)`): currently function-call only

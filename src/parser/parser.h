@@ -33,6 +33,7 @@ private:
     StmtPtr printStatement();   // "print" expression ";"
     StmtPtr ifStatement();      // "if" "(" expression ")" statement ("else" statement)?
     StmtPtr whileStatement();   // "while" "(" expression ")" statement
+    StmtPtr forStatement();     // "for" "(" (varDecl|exprStmt|";") expression? ";" expression? ")" statement -- desugars to a whileStmt
     StmtPtr returnStatement();  // "return" expression? ";"
     StmtPtr expressionStatement(); // expression ";"
     std::vector<StmtPtr> block();  // "{" declaration* "}"

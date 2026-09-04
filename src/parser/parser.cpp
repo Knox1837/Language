@@ -10,9 +10,11 @@
 // funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 // parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-// statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
+// statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
+// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
+//                (desugars to a whileStmt; no dedicated AST node)
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
 // exprStmt    -> expression ";"
@@ -120,6 +122,7 @@ StmtPtr Parser::statement() {
     if (match({TokenType::PRINT})) return printStatement();
     if (match({TokenType::IF})) return ifStatement();
     if (match({TokenType::WHILE})) return whileStatement();
+    if (match({TokenType::FOR})) return forStatement();
     if (match({TokenType::RETURN})) return returnStatement();
     if (match({TokenType::LEFT_BRACE})) {
         return std::make_unique<BlockStmt>(block());
@@ -153,6 +156,59 @@ StmtPtr Parser::whileStatement() {
     consume(TokenType::RIGHT_PAREN, "Expect ')' after while condition.");
     StmtPtr body = statement();
     return std::make_unique<WhileStmt>(std::move(condition), std::move(body));
+}
+
+StmtPtr Parser::forStatement() {
+    // "for (init; cond; incr) body" into: { init; while (cond) { body; incr; }}
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
+
+    StmtPtr initializer;
+    if (match({TokenType::SEMICOLON})) {
+        initializer = nullptr;
+    } else if (match({TokenType::VAR})) {
+        initializer = varDeclaration();
+    } else {
+        initializer = expressionStatement();
+    }
+
+    ExprPtr condition = nullptr;
+    if (!check(TokenType::SEMICOLON)) {
+        condition = expression();
+    }
+    consume(TokenType::SEMICOLON, "Expect ';' after loop condition.");
+
+    ExprPtr increment = nullptr;
+    if (!check(TokenType::RIGHT_PAREN)) {
+        increment = expression();
+    }
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
+
+    StmtPtr body = statement();
+
+    // Splice the increment onto the end of the body, if present.
+    if (increment != nullptr) {
+        std::vector<StmtPtr> bodyStatements;
+        bodyStatements.push_back(std::move(body));
+        bodyStatements.push_back(std::make_unique<ExpressionStmt>(std::move(increment)));
+        body = std::make_unique<BlockStmt>(std::move(bodyStatements));
+    }
+
+    // No condition means an infinite loop, same as C's "for (;;)".
+    if (condition == nullptr) {
+        condition = std::make_unique<Literal>(LiteralValue{true});
+    }
+    body = std::make_unique<WhileStmt>(std::move(condition), std::move(body));
+
+    // Prepend the initializer, if present, in its own enclosing block so the
+    // loop variable's scope is limited to the loop itself.
+    if (initializer != nullptr) {
+        std::vector<StmtPtr> outer;
+        outer.push_back(std::move(initializer));
+        outer.push_back(std::move(body));
+        body = std::make_unique<BlockStmt>(std::move(outer));
+    }
+
+    return body;
 }
 
 StmtPtr Parser::returnStatement() {
