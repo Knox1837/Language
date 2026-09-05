@@ -8,6 +8,7 @@
 #include "array_object.h"
 #include "map_object.h"
 #include "array_methods.h"
+#include "map_methods.h"
 #include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
@@ -193,7 +194,10 @@ void Interpreter::visitGetExpr(Get& expr) {
         result = getArrayMethod(std::get<std::shared_ptr<ArrayObject>>(object), expr.name);
         return;
     }
-    
+    if (std::holds_alternative<std::shared_ptr<MapObject>>(object)) {
+        result = getMapMethod(std::get<std::shared_ptr<MapObject>>(object), expr.name);
+        return;
+    }
 
     throw RuntimeError(expr.name, "Only instances, arrays, and maps have properties.");
 }
