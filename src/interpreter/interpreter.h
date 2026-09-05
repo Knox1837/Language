@@ -47,6 +47,7 @@ public:
     void visitFunctionStmt(FunctionStmt& stmt) override;
     void visitReturnStmt(ReturnStmt& stmt) override;
     void visitClassStmt(ClassStmt& stmt) override;
+    void visitMapLiteralExpr(MapLiteral& expr) override;
 
 private:
     std::shared_ptr<Environment> environment; // current scope; starts as globals

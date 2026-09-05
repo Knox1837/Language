@@ -10,7 +10,7 @@
 // funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 // parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-// statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt | block
+// statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
 // forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
@@ -415,6 +415,22 @@ ExprPtr Parser::primary() {
         }
         consume(TokenType::RIGHT_BRACKET, "Expect ']' after array elements.");
         return std::make_unique<ArrayLiteral>(std::move(elements));
+    }
+
+    // Map literal: {"key": expr, "key2": expr2, ...}. Only reachable from within expression parsing (this is primary(), not statement())
+    // so it never conflicts with "{" starting a block: that decision is already made one level up, in statement().
+    if (match({TokenType::LEFT_BRACE})) {
+        std::vector<std::pair<std::string, ExprPtr>> entries;
+        if (!check(TokenType::RIGHT_BRACE)) {
+            do {
+                Token keyToken = consume(TokenType::STRING, "Expect string key in map literal.");
+                consume(TokenType::COLON, "Expect ':' after map key.");
+                ExprPtr valueExpr = expression();
+                entries.emplace_back(keyToken.lexeme, std::move(valueExpr));
+            } while (match({TokenType::COMMA}));
+        }
+        consume(TokenType::RIGHT_BRACE, "Expect '}' after map entries.");
+        return std::make_unique<MapLiteral>(std::move(entries));
     }
 
     throw error(peek(), "Expect expression.");
