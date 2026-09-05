@@ -5,6 +5,7 @@
 #include "io_lib.h"
 #include "array_lib.h"
 #include "type_lib.h"
+#include "map_lib.h"
 
 void registerStdlib(std::shared_ptr<Environment> globals) {
     registerMathLib(globals);
@@ -12,4 +13,5 @@ void registerStdlib(std::shared_ptr<Environment> globals) {
     registerIoLib(globals);
     registerArrayLib(globals);
     registerTypeLib(globals);
+    registerMapLib(globals);
 }

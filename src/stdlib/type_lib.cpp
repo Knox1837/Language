@@ -4,6 +4,7 @@
 #include "type_lib.h"
 #include "native_function.h"
 #include "../interpreter/array_object.h"
+#include "../interpreter/map_object.h"
 
 void registerTypeLib(std::shared_ptr<Environment> globals) {
     globals->define("isNumber", Value{std::make_shared<NativeFunction>(
@@ -31,6 +32,13 @@ void registerTypeLib(std::shared_ptr<Environment> globals) {
         "isArray", 1,
         [](Interpreter&, std::vector<Value>& args) -> Value {
             return std::holds_alternative<std::shared_ptr<ArrayObject>>(args[0]);
+        }
+    )});
+
+    globals->define("isMap", Value{std::make_shared<NativeFunction>(
+        "isMap", 1,
+        [](Interpreter&, std::vector<Value>& args) -> Value {
+            return std::holds_alternative<std::shared_ptr<MapObject>>(args[0]);
         }
     )});
 

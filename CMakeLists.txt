@@ -21,12 +21,16 @@ add_executable(mylang
     src/stdlib/io_lib.cpp
     src/stdlib/array_lib.cpp
     src/stdlib/type_lib.cpp
+    src/stdlib/map_lib.cpp
     src/stdlib/stdlib.cpp
 )
 
 target_include_directories(mylang PRIVATE src)
 
-# Copy the built exe to the project root after every build
+# Also copy the built exe to the project root after every build, so
+# `.\mylang.exe` at the top level always matches the latest CMake build
+# (the "real"/canonical binary still lives in build/Debug/ — this is
+# purely a convenience copy).
 add_custom_command(TARGET mylang POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:mylang>

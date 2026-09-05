@@ -1,8 +1,8 @@
-# mylang: Language Specification
+# mylang — Language Specification
 
 Status: living document. Update this whenever a language feature changes.
 Currently covers: lexer, parser, tree-walking interpreter, functions &
-closures, classes, inheritance, standard library, arrays.
+closures, classes, inheritance, standard library, arrays, maps.
 
 ## Overview
 
@@ -29,12 +29,13 @@ class     this      super
 | function | `def f() {}` | first-class: can be assigned, passed, and returned |
 | class  | `class C {}`   | first-class: calling a class constructs an instance |
 | instance | (result of calling a class) | holds fields, created dynamically on first assignment |
-| array  | `[1, 2, 3]`    | reference type: assigning or passing an array shares the same underlying data, like instances |
+| array  | `[1, 2, 3]`    | reference type — assigning or passing an array shares the same underlying data, like instances |
+| map    | `{"key": val}` | reference type; **string keys only** (see design note below) |
 
 ## Truthiness
 
-Only `nil` and `false` are falsey. Everything else: including the
-number `0` and the empty string `""`: is truthy. (This differs from C,
+Only `nil` and `false` are falsey. Everything else — including the
+number `0` and the empty string `""` — is truthy. (This differs from C,
 where `0` is falsey.)
 
 ## Operators
@@ -47,7 +48,7 @@ where `0` is falsey.)
 | Equality   | `== !=` | works across any two values; different types are never equal |
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |
-| Indexing   | `arr[i]`, `arr[i] = x` | both are expressions; index-assignment returns the assigned value |
+| Indexing   | `arr[i]`, `arr[i] = x` | both are expressions; index-assignment returns the assigned value; also used for map access: `map["key"]` |
 
 No `%` (modulo) operator yet.
 
@@ -84,6 +85,7 @@ arguments   -> expression ( "," expression )*
 primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
              | "(" expression ")" | IDENTIFIER | "super" "." IDENTIFIER
              | "[" ( expression ( "," expression )* )? "]"
+             | "{" ( STRING ":" expression ( "," STRING ":" expression )* )? "}"
 ```
 
 ## Scoping
@@ -137,7 +139,7 @@ def add(a, b) {
 print add(2, 3);   // 5
 ```
 
-- No return type annotation: return type is whatever the returned
+- No return type annotation — return type is whatever the returned
   value's runtime type is (or `nil` if no `return` is hit).
 - Recursion works normally.
 - Functions are values: they can be stored in variables, passed as
@@ -179,7 +181,7 @@ print c.increment(); // 2
 - `init()` is the constructor convention: called automatically when the
   class is invoked (`Counter()`), and always returns `this` regardless
   of what it explicitly returns (matches Lox/Python's `__init__`).
-- Fields are dynamic: not declared up front, just created on first
+- Fields are dynamic — not declared up front, just created on first
   assignment (`this.count = 0`), same as Python's `self.x = ...`.
 - Each instance has independent state; separate `Counter()` calls don't
   share fields.
@@ -247,14 +249,45 @@ print grid[0][1];    // 2
   push(b, 4);
   print a; // [1, 2, 3, 4] -- a sees b's mutation
   ```
-- No `arr.method()` syntax: array operations are plain function calls
+- No `arr.method()` syntax — array operations are plain function calls
   (`push(arr, x)`, not `arr.push(x)`), since arrays are a primitive
   value type, not objects with a field/method table like class instances.
+
+## Maps
+
+```
+var person = {"name": "Knox", "age": 21};
+print person["name"];    // Knox
+person["age"] = 22;      // update existing key
+person["city"] = "Kathmandu"; // insert new key
+print person;            // {"age": 22, "city": Kathmandu, "name": Knox}
+```
+
+- Map literals: `{"key": expr, "key2": expr2, ...}` — **keys must be
+  string literals** written directly in the source (not arbitrary
+  expressions or bare identifiers), a deliberate simplification.
+- **Design note — why string-only keys**: allowing arbitrary-type keys
+  would require `Value` itself to be hashable/orderable, which is
+  significant extra machinery for a feature most scripting languages'
+  *simplest* map type doesn't need. String keys cover the common
+  JSON-like-data use case cleanly.
+- Reuses the same `[]` syntax as arrays: `map["key"]` reads, `map["key"]
+  = x` writes. Unlike array indexing (fixed positions, out-of-range is
+  an error), map index-assignment **always succeeds** — it inserts a new
+  key if one doesn't exist yet, or overwrites an existing one.
+- Reading a key that doesn't exist is a runtime error ("Undefined map
+  key '...'").
+- **Reference semantics**, same as arrays and instances — assigning or
+  passing a map shares the underlying data.
+- Iteration order (when printing, or via `keys()`/`values()`) is always
+  **sorted by key**, not insertion order — deterministic and easy to test.
+- `.` property access does **not** work on maps (`map.key` is invalid) —
+  only `[]` indexing, same distinction as arrays vs. class instances.
 
 ## Standard library
 
 A set of native (C++-implemented) built-in functions are available
-globally in every script: no import needed.
+globally in every script — no import needed.
 
 **Math**
 
@@ -288,7 +321,7 @@ globally in every script: no import needed.
 | `replace(s, old, new)` | string, string, string → string | replaces **all** occurrences |
 | `split(s, delimiter)` | string, string → array | delimiter must be non-empty |
 | `join(arr, delimiter)` | array, string → string | inverse of `split`; elements stringified with the same rules as `str()` |
-| `toNumber(s)` | string → number | parses a string to a number; error on invalid input: currently the only string→number conversion path |
+| `toNumber(s)` | string → number | parses a string to a number; error on invalid input — currently the only string→number conversion path |
 | `str(x)` | any → string | converts any value to its string form |
 
 **Arrays**
@@ -297,26 +330,36 @@ globally in every script: no import needed.
 |---|---|---|
 | `push(arr, x)` | array, any → number | appends in place, returns new length |
 | `pop(arr)` | array → any | removes & returns the last element; error if empty |
-| `length(arr)` | array → number | number of elements (separate from `len`, which is string-only) |
+| `length(arr)` | array → number | number of elements (separate from `len`, which is string-only); also accepts maps — see Maps section below |
 | `contains(arr, x)` | array, any → bool | true if `x` appears anywhere in the array |
 | `indexOf(arr, x)` | array, any → number | first matching index, or `-1` |
 | `sort(arr)` | array → array | ascending, **in place**; numbers-only or strings-only (mixed types error) |
 | `reverse(arr)` | array → array | in place |
 | `slice(arr, start, end)` | array, number, number → array | returns a **new** array, end-exclusive; does not mutate the original |
-| `binarySearch(arr, x)` | array, any → number | O(log n); **assumes `arr` is already sorted ascending**: call `sort()` first |
+| `binarySearch(arr, x)` | array, any → number | O(log n); **assumes `arr` is already sorted ascending** — call `sort()` first |
+
+**Maps**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `keys(map)` | map → array | all keys, sorted; returns a new array (a snapshot, not a live view) |
+| `values(map)` | map → array | all values, in the same sorted-by-key order as `keys()` |
+| `hasKey(map, k)` | map, string → bool | |
+| `remove(map, k)` | map, string → bool | deletes the entry in place; returns whether it existed |
+| `length(map)` | map → number | shared with arrays — see above |
 
 **I/O**
 
 | Function | Signature | Notes |
 |---|---|---|
-| `input()` | () → string | reads one line from stdin; returns `""` on EOF (no prompt argument: print your own prompt first) |
+| `input()` | () → string | reads one line from stdin; returns `""` on EOF (no prompt argument — print your own prompt first) |
 
 **Type checks**
 
 | Function | Signature | Notes |
 |---|---|---|
-| `isNumber(x)` / `isString(x)` / `isBool(x)` / `isArray(x)` / `isNil(x)` | any → bool | |
-| `isFunction(x)` | any → bool | true for both user-defined functions AND classes (a class is callable: calling it constructs an instance) |
+| `isNumber(x)` / `isString(x)` / `isBool(x)` / `isArray(x)` / `isMap(x)` / `isNil(x)` | any → bool | |
+| `isFunction(x)` | any → bool | true for both user-defined functions AND classes (a class is callable — calling it constructs an instance) |
 
 Native functions raise the same `RuntimeError` mechanism as the rest of
 the interpreter, but since they aren't tied to a specific AST node, their
@@ -335,9 +378,8 @@ error messages report line `0` rather than the calling line.
 
 ## Not yet implemented
 
-- `break` / `continue` (relevant now that `for` and `while` loops exist)
 - `%` modulo, compound assignment (`+=` etc.)
-- Maps / dictionaries
-- Method-call syntax on arrays (`arr.push(x)`): currently function-call only
+- Non-string map keys
+- Method-call syntax on arrays/maps (`arr.push(x)`) — currently function-call only
 - An import/module system (everything currently lives in one global scope)
 - Bytecode VM (current implementation is a tree-walking interpreter)

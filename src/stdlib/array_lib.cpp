@@ -2,6 +2,7 @@
 #include "array_lib.h"
 #include "native_function.h"
 #include "../interpreter/array_object.h"
+#include "../interpreter/map_object.h"
 #include <algorithm>
 
 static std::shared_ptr<ArrayObject> requireArray(const std::string& fnName, const Value& v) {
@@ -51,8 +52,13 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
     globals->define("length", Value{std::make_shared<NativeFunction>(
         "length", 1,
         [](Interpreter&, std::vector<Value>& args) -> Value {
-            auto array = requireArray("length", args[0]);
-            return static_cast<double>(array->elements.size());
+            if (std::holds_alternative<std::shared_ptr<ArrayObject>>(args[0])) {
+                return static_cast<double>(std::get<std::shared_ptr<ArrayObject>>(args[0])->elements.size());
+            }
+            if (std::holds_alternative<std::shared_ptr<MapObject>>(args[0])) {
+                return static_cast<double>(std::get<std::shared_ptr<MapObject>>(args[0])->entries.size());
+            }
+            throw nativeError("length", "Expected an array or map argument.");
         }
     )});
 
