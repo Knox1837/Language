@@ -7,6 +7,7 @@
 #include "lox_instance.h"
 #include "array_object.h"
 #include "map_object.h"
+#include "array_methods.h"
 #include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
@@ -183,10 +184,18 @@ void Interpreter::visitCallExpr(Call& expr) {
 
 void Interpreter::visitGetExpr(Get& expr) {
     Value object = evaluate(*expr.object);
-    if (!std::holds_alternative<std::shared_ptr<LoxInstance>>(object)) {
-        throw RuntimeError(expr.name, "Only instances have properties.");
+
+    if (std::holds_alternative<std::shared_ptr<LoxInstance>>(object)) {
+        result = std::get<std::shared_ptr<LoxInstance>>(object)->get(expr.name);
+        return;
     }
-    result = std::get<std::shared_ptr<LoxInstance>>(object)->get(expr.name);
+    if (std::holds_alternative<std::shared_ptr<ArrayObject>>(object)) {
+        result = getArrayMethod(std::get<std::shared_ptr<ArrayObject>>(object), expr.name);
+        return;
+    }
+    
+
+    throw RuntimeError(expr.name, "Only instances, arrays, and maps have properties.");
 }
 
 void Interpreter::visitSetExpr(Set& expr) {

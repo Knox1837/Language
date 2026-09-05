@@ -15,6 +15,7 @@ add_executable(mylang
     src/interpreter/value.cpp
     src/interpreter/lox_class.cpp
     src/interpreter/lox_instance.cpp
+    src/interpreter/array_methods.cpp
     src/stdlib/native_function.cpp
     src/stdlib/math_lib.cpp
     src/stdlib/string_lib.cpp
