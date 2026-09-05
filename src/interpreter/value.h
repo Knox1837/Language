@@ -9,10 +9,11 @@
 class Callable;     // callable.h — functions AND classes (calling a class constructs an instance)
 class LoxInstance;   // lox_instance.h — a runtime object with fields, created from a class
 class ArrayObject;   // array_object.h — a runtime array, holding a vector<Value>
+class MapObject;      // map_object.h — a runtime map/dictionary with string keys
 
 using Value = std::variant<std::monostate, double, bool, std::string,
                             std::shared_ptr<Callable>, std::shared_ptr<LoxInstance>,
-                            std::shared_ptr<ArrayObject>>;
+                            std::shared_ptr<ArrayObject>, std::shared_ptr<MapObject>>;
 
 // Converts a parse-time LiteralValue (nil/number/bool/string only) into a runtime Value (which has extra alternatives for functions/instances).
 // Needed because the two variants have different alternative sets, so C++ won't convert between them implicitly.
