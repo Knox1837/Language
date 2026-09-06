@@ -23,6 +23,8 @@ struct ArrayLiteral;
 struct Index;
 struct IndexSet;
 struct MapLiteral;
+struct CompoundSet;
+struct CompoundIndexSet;
 
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
@@ -45,6 +47,8 @@ struct ExprVisitor {
     virtual void visitIndexExpr(Index& expr) = 0;
     virtual void visitIndexSetExpr(IndexSet& expr) = 0;
     virtual void visitMapLiteralExpr(MapLiteral& expr) = 0;
+    virtual void visitCompoundSetExpr(CompoundSet& expr) = 0;
+    virtual void visitCompoundIndexSetExpr(CompoundIndexSet& expr) = 0;
     virtual ~ExprVisitor() = default;
 };
 
@@ -195,4 +199,29 @@ struct MapLiteral : Expr {
     explicit MapLiteral(std::vector<std::pair<std::string, ExprPtr>> entries)
         : entries(std::move(entries)) {}
     void accept(ExprVisitor& visitor) override { visitor.visitMapLiteralExpr(*this); }
+};
+
+// object.name OP= value   e.g.  obj.count += 1
+struct CompoundSet : Expr {
+    ExprPtr object;
+    Token name;
+    Token op;      // the base operator: +, -, *, /, or % (already stripped of the trailing '=')
+    ExprPtr value;
+    CompoundSet(ExprPtr object, Token name, Token op, ExprPtr value)
+        : object(std::move(object)), name(std::move(name)), op(std::move(op)), value(std::move(value)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitCompoundSetExpr(*this); }
+};
+
+// object[index] OP= value   e.g.  arr[i] += 1,  map["key"] *= 2
+// Same "evaluate the target once" reasoning as CompoundSet, extended to cover both `object` and `index`, either could have side effects.
+struct CompoundIndexSet : Expr {
+    ExprPtr object;
+    Token bracket;
+    ExprPtr indexExpr;
+    Token op;
+    ExprPtr value;
+    CompoundIndexSet(ExprPtr object, Token bracket, ExprPtr indexExpr, Token op, ExprPtr value)
+        : object(std::move(object)), bracket(std::move(bracket)),
+          indexExpr(std::move(indexExpr)), op(std::move(op)), value(std::move(value)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitCompoundIndexSetExpr(*this); }
 };

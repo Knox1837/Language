@@ -48,10 +48,10 @@ where `0` is falsey.)
 | Equality   | `== !=` | works across any two values; different types are never equal |
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |
-| Compound assignment | `+= -= *= /= %=` | desugars to `x = x <op> value`; **plain variables only** — `obj.field += 1` and `arr[i] += 1` are parse errors, not silently broken (see design note below) |
+| Compound assignment | `+= -= *= /= %=` | works on variables, fields (`obj.f += 1`), and indices (`arr[i] += 1`, `map["k"] += 1`); the target is evaluated exactly once even if it has side effects (see design note below) |
 | Indexing   | `arr[i]`, `arr[i] = x` | both are expressions; index-assignment returns the assigned value; also used for map access: `map["key"]` |
 
-**Design note — why compound assignment is variable-only:** safely supporting `obj.field += 1` requires evaluating `obj` exactly once and reusing it for both the read and the write. The current AST has no clean way to express "evaluate this sub-expression once, use the result twice," so rather than risk silently double-evaluating a target (which could duplicate side effects, e.g. if `obj` were itself a function call), this case is rejected at parse time with a clear error instead.
+**Design note — how compound assignment avoids double evaluation:** `obj.field += 1` and `arr[i] += 1` don't desugar into two separate Get/Set (or Index/IndexSet) nodes — doing so would evaluate `obj`/`arr` (and `i`) *twice*, which would be wrong if that expression has side effects (e.g. `getObject().field += 1` calling `getObject()` twice). Instead, dedicated `CompoundSet`/`CompoundIndexSet` AST nodes evaluate the target exactly once and reuse that single result for both the read and the write. Plain variables (`x += 1`) still desugar directly to `x = x + 1`, since re-reading a variable by name has no side effects to duplicate.
 
 ## Grammar (EBNF-ish)
 
@@ -74,7 +74,7 @@ printStmt   -> "print" expression ";"
 
 expression  -> assignment
 assignment  -> ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) "=" assignment
-             | IDENTIFIER ( "+=" | "-=" | "*=" | "/=" | "%=" ) assignment
+             | ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) ( "+=" | "-=" | "*=" | "/=" | "%=" ) assignment
              | logicOr
 logicOr     -> logicAnd ( "or" logicAnd )*
 logicAnd    -> equality ( "and" equality )*
@@ -386,8 +386,6 @@ error messages report line `0` rather than the calling line.
   and halt execution of that script/REPL line.
 
 ## Not yet implemented
-
-- Compound assignment on fields/indices (`obj.f += 1`, `arr[i] += 1`) — variables only for now, see design note above
 - Non-string map keys
 - An import/module system (everything currently lives in one global scope)
 - Bytecode VM (current implementation is a tree-walking interpreter)

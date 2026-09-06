@@ -15,9 +15,11 @@ public:
     Interpreter();
 
     // Entry point: executes a whole program (list of top-level statements).
+    // Catches RuntimeError internally and reports it, matching how a real script runner behaves (one runtime error stops execution and prints it).
     void interpret(const std::vector<StmtPtr>& statements);
 
     // Runs `statements` in a fresh scope chained to `newEnv`'s parent chain.
+    // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope.
     void executeBlock(const std::vector<StmtPtr>& statements, std::shared_ptr<Environment> newEnv);
 
     // expression visitors: each computes a Value and stores it in `result`
@@ -36,6 +38,9 @@ public:
     void visitArrayLiteralExpr(ArrayLiteral& expr) override;
     void visitIndexExpr(Index& expr) override;
     void visitIndexSetExpr(IndexSet& expr) override;
+    void visitMapLiteralExpr(MapLiteral& expr) override;
+    void visitCompoundSetExpr(CompoundSet& expr) override;
+    void visitCompoundIndexSetExpr(CompoundIndexSet& expr) override;
 
     // statement visitors: each performs an action (no return value)
     void visitExpressionStmt(ExpressionStmt& stmt) override;
@@ -47,7 +52,6 @@ public:
     void visitFunctionStmt(FunctionStmt& stmt) override;
     void visitReturnStmt(ReturnStmt& stmt) override;
     void visitClassStmt(ClassStmt& stmt) override;
-    void visitMapLiteralExpr(MapLiteral& expr) override;
 
 private:
     std::shared_ptr<Environment> environment; // current scope; starts as globals
@@ -61,4 +65,5 @@ private:
     static void checkNumberOperand(const Token& op, const Value& operand);
     static void checkNumberOperands(const Token& op, const Value& left, const Value& right);
     static bool isEqual(const Value& a, const Value& b);
+    static Value applyArithmeticOp(TokenType op, const Token& opToken, const Value& left, const Value& right);
 };

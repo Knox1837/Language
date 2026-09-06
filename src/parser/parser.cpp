@@ -276,17 +276,27 @@ ExprPtr Parser::assignment() {
         if (match({compoundType})) {
             Token opToken = previous();
             ExprPtr value = assignment();
+            Token baseOp(baseType, opToken.lexeme.substr(0, opToken.lexeme.size() - 1), opToken.line);
 
-            auto* varExpr = dynamic_cast<Variable*>(expr.get());
-            if (!varExpr) {
-                error(opToken, "Compound assignment is only supported on plain variables (not fields or indices).");
-                return expr;
+            if (auto* varExpr = dynamic_cast<Variable*>(expr.get())) {
+                // Plain variable: safe to desugar, since re-reading a
+                // variable by name has no side effects to duplicate.
+                Token name = varExpr->name;
+                auto binary = std::make_unique<Binary>(std::make_unique<Variable>(name), std::move(baseOp), std::move(value));
+                return std::make_unique<Assign>(std::move(name), std::move(binary));
+            }
+            if (auto* getExpr = dynamic_cast<Get*>(expr.get())) {
+                return std::make_unique<CompoundSet>(std::move(getExpr->object), getExpr->name,
+                                                       std::move(baseOp), std::move(value));
+            }
+            if (auto* indexExpr = dynamic_cast<Index*>(expr.get())) {
+                return std::make_unique<CompoundIndexSet>(std::move(indexExpr->object), indexExpr->bracket,
+                                                            std::move(indexExpr->indexExpr), std::move(baseOp),
+                                                            std::move(value));
             }
 
-            Token name = varExpr->name;
-            Token baseOp(baseType, opToken.lexeme.substr(0, opToken.lexeme.size() - 1), opToken.line);
-            auto binary = std::make_unique<Binary>(std::make_unique<Variable>(name), std::move(baseOp), std::move(value));
-            return std::make_unique<Assign>(std::move(name), std::move(binary));
+            error(opToken, "Invalid compound assignment target.");
+            return expr;
         }
     }
 

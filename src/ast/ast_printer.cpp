@@ -78,6 +78,42 @@ void ASTPrinter::visitSuperExpr(Super& expr) {
     result = "(super " + expr.method.lexeme + ")";
 }
 
+void ASTPrinter::visitArrayLiteralExpr(ArrayLiteral& expr) {
+    std::ostringstream out;
+    out << "(array";
+    for (auto& e : expr.elements) {
+        out << " " << print(*e);
+    }
+    out << ")";
+    result = out.str();
+}
+
+void ASTPrinter::visitIndexExpr(Index& expr) {
+    result = parenthesize("index", *expr.object, *expr.indexExpr);
+}
+
+void ASTPrinter::visitIndexSetExpr(IndexSet& expr) {
+    result = parenthesize("index-set", *expr.object, *expr.indexExpr, *expr.value);
+}
+
+void ASTPrinter::visitMapLiteralExpr(MapLiteral& expr) {
+    std::ostringstream out;
+    out << "(map";
+    for (auto& [key, valueExpr] : expr.entries) {
+        out << " " << key << ":" << print(*valueExpr);
+    }
+    out << ")";
+    result = out.str();
+}
+
+void ASTPrinter::visitCompoundSetExpr(CompoundSet& expr) {
+    result = parenthesize(expr.op.lexeme + "= " + expr.name.lexeme, *expr.object, *expr.value);
+}
+
+void ASTPrinter::visitCompoundIndexSetExpr(CompoundIndexSet& expr) {
+    result = parenthesize(std::string(expr.op.lexeme) + "=[]", *expr.object, *expr.indexExpr, *expr.value);
+}
+
 void ASTPrinter::visitExpressionStmt(ExpressionStmt& stmt) {
     result = parenthesize("expr", *stmt.expression);
 }

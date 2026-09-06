@@ -79,46 +79,55 @@ void Interpreter::visitUnaryExpr(Unary& expr) {
     }
 }
 
+// Shared arithmetic logic for +, -, *, /, % — used by both plain binary expressions (a + b) and compound assignment (a += b)
+Value Interpreter::applyArithmeticOp(TokenType op, const Token& opToken, const Value& left, const Value& right) {
+    switch (op) {
+        case TokenType::MINUS:
+            checkNumberOperands(opToken, left, right);
+            return std::get<double>(left) - std::get<double>(right);
+        case TokenType::SLASH:
+            checkNumberOperands(opToken, left, right);
+            if (std::get<double>(right) == 0.0) {
+                throw RuntimeError(opToken, "Division by zero.");
+            }
+            return std::get<double>(left) / std::get<double>(right);
+        case TokenType::STAR:
+            checkNumberOperands(opToken, left, right);
+            return std::get<double>(left) * std::get<double>(right);
+        case TokenType::PERCENT:
+            checkNumberOperands(opToken, left, right);
+            if (std::get<double>(right) == 0.0) {
+                throw RuntimeError(opToken, "Modulo by zero.");
+            }
+            // fmod (not integer %) since the language's only numeric type is double
+            // matches how JS's % works, including taking the sign of the dividend for negative operands
+            return std::fmod(std::get<double>(left), std::get<double>(right));
+        case TokenType::PLUS:
+            // '+' overloads: number+number adds, string+string concatenates
+            if (std::holds_alternative<double>(left) && std::holds_alternative<double>(right)) {
+                return std::get<double>(left) + std::get<double>(right);
+            }
+            if (std::holds_alternative<std::string>(left) && std::holds_alternative<std::string>(right)) {
+                return std::get<std::string>(left) + std::get<std::string>(right);
+            }
+            throw RuntimeError(opToken, "Operands must be two numbers or two strings.");
+        default:
+            throw RuntimeError(opToken, "Not a valid arithmetic operator."); // unreachable in practice
+    }
+}
+
 void Interpreter::visitBinaryExpr(Binary& expr) {
     Value left = evaluate(*expr.left);
     Value right = evaluate(*expr.right);
 
     switch (expr.op.type) {
         case TokenType::MINUS:
-            checkNumberOperands(expr.op, left, right);
-            result = std::get<double>(left) - std::get<double>(right);
-            return;
         case TokenType::SLASH:
-            checkNumberOperands(expr.op, left, right);
-            if (std::get<double>(right) == 0.0) {
-                throw RuntimeError(expr.op, "Division by zero.");
-            }
-            result = std::get<double>(left) / std::get<double>(right);
-            return;
         case TokenType::STAR:
-            checkNumberOperands(expr.op, left, right);
-            result = std::get<double>(left) * std::get<double>(right);
-            return;
         case TokenType::PERCENT:
-            checkNumberOperands(expr.op, left, right);
-            if (std::get<double>(right) == 0.0) {
-                throw RuntimeError(expr.op, "Modulo by zero.");
-            }
-            // fmod (not integer %) since the language's only numeric type is double
-            // matches how JS's % works, including taking the sign of the dividend for negative operands
-            result = std::fmod(std::get<double>(left), std::get<double>(right));
-            return;
         case TokenType::PLUS:
-            // '+' overloads: number+number adds, string+string concatenates
-            if (std::holds_alternative<double>(left) && std::holds_alternative<double>(right)) {
-                result = std::get<double>(left) + std::get<double>(right);
-                return;
-            }
-            if (std::holds_alternative<std::string>(left) && std::holds_alternative<std::string>(right)) {
-                result = std::get<std::string>(left) + std::get<std::string>(right);
-                return;
-            }
-            throw RuntimeError(expr.op, "Operands must be two numbers or two strings.");
+            result = applyArithmeticOp(expr.op.type, expr.op, left, right);
+            return;
         case TokenType::GREATER:
             checkNumberOperands(expr.op, left, right);
             result = std::get<double>(left) > std::get<double>(right);
@@ -219,6 +228,22 @@ void Interpreter::visitSetExpr(Set& expr) {
     Value value = evaluate(*expr.value);
     std::get<std::shared_ptr<LoxInstance>>(object)->set(expr.name, value);
     result = value; // "a.b = c" is itself an expression, same as plain assignment
+}
+
+void Interpreter::visitCompoundSetExpr(CompoundSet& expr) {
+    // `object` is evaluated exactly ONCE here and reused for both the read (via LoxInstance::get) and the write (via ->set)
+    Value object = evaluate(*expr.object);
+    if (!std::holds_alternative<std::shared_ptr<LoxInstance>>(object)) {
+        throw RuntimeError(expr.name, "Only instances have fields.");
+    }
+    auto instance = std::get<std::shared_ptr<LoxInstance>>(object);
+
+    Value currentValue = instance->get(expr.name);
+    Value rhs = evaluate(*expr.value);
+    Value newValue = applyArithmeticOp(expr.op.type, expr.op, currentValue, rhs);
+
+    instance->set(expr.name, newValue);
+    result = newValue;
 }
 
 void Interpreter::visitThisExpr(This& expr) {
@@ -409,6 +434,47 @@ void Interpreter::visitIndexSetExpr(IndexSet& expr) {
         // Unlike arrays (fixed positions, out-of-range is an error), maps grow freely
         // assigning a new key inserts it, same as most scripting languages' dict/map assignment.
         map->entries[std::get<std::string>(indexValue)] = newValue;
+        result = newValue;
+        return;
+    }
+
+    throw RuntimeError(expr.bracket, "Only arrays and maps can be indexed.");
+}
+
+void Interpreter::visitCompoundIndexSetExpr(CompoundIndexSet& expr) {
+    // `object` and `indexExpr` are each evaluated exactly once here and reused for both the read and the write below.
+    Value objectValue = evaluate(*expr.object);
+    Value indexValue = evaluate(*expr.indexExpr);
+
+    if (std::holds_alternative<std::shared_ptr<ArrayObject>>(objectValue)) {
+        if (!std::holds_alternative<double>(indexValue)) {
+            throw RuntimeError(expr.bracket, "Array index must be a number.");
+        }
+        auto array = std::get<std::shared_ptr<ArrayObject>>(objectValue);
+        int index = static_cast<int>(std::get<double>(indexValue));
+        if (index < 0 || index >= static_cast<int>(array->elements.size())) {
+            throw RuntimeError(expr.bracket, "Array index out of range.");
+        }
+        Value rhs = evaluate(*expr.value);
+        Value newValue = applyArithmeticOp(expr.op.type, expr.op, array->elements[index], rhs);
+        array->elements[index] = newValue;
+        result = newValue;
+        return;
+    }
+
+    if (std::holds_alternative<std::shared_ptr<MapObject>>(objectValue)) {
+        if (!std::holds_alternative<std::string>(indexValue)) {
+            throw RuntimeError(expr.bracket, "Map key must be a string.");
+        }
+        auto map = std::get<std::shared_ptr<MapObject>>(objectValue);
+        const std::string& key = std::get<std::string>(indexValue);
+        auto it = map->entries.find(key);
+        if (it == map->entries.end()) {
+            throw RuntimeError(expr.bracket, "Undefined map key '" + key + "'.");
+        }
+        Value rhs = evaluate(*expr.value);
+        Value newValue = applyArithmeticOp(expr.op.type, expr.op, it->second, rhs);
+        map->entries[key] = newValue;
         result = newValue;
         return;
     }

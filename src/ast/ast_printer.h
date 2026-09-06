@@ -24,6 +24,12 @@ public:
     void visitSetExpr(Set& expr) override;
     void visitThisExpr(This& expr) override;
     void visitSuperExpr(Super& expr) override;
+    void visitArrayLiteralExpr(ArrayLiteral& expr) override;
+    void visitIndexExpr(Index& expr) override;
+    void visitIndexSetExpr(IndexSet& expr) override;
+    void visitMapLiteralExpr(MapLiteral& expr) override;
+    void visitCompoundSetExpr(CompoundSet& expr) override;
+    void visitCompoundIndexSetExpr(CompoundIndexSet& expr) override;
 
     void visitExpressionStmt(ExpressionStmt& stmt) override;
     void visitPrintStmt(PrintStmt& stmt) override;
