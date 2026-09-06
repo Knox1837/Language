@@ -1,4 +1,4 @@
-// Scans raw source text into a flat list of tokens (unchanged, now just relocated)
+// Scans raw source text into a flat list of tokens
 #pragma once
 #include <string>
 #include <vector>

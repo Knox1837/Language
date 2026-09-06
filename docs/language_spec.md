@@ -42,15 +42,16 @@ where `0` is falsey.)
 
 | Category   | Operators | Notes |
 |------------|-----------|-------|
-| Arithmetic | `+ - * /` | `/` always produces a float result; division by zero is a runtime error |
+| Arithmetic | `+ - * / %` | `/` always produces a float result; division/modulo by zero is a runtime error; `%` uses `fmod` semantics (result takes the sign of the dividend: `-7 % 3` is `-1`, not `2`) |
 | `+` overload | `number + number`, `string + string` | mixing types throws a runtime error |
 | Comparison | `> >= < <=` | numbers only |
 | Equality   | `== !=` | works across any two values; different types are never equal |
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |
+| Compound assignment | `+= -= *= /= %=` | desugars to `x = x <op> value`; **plain variables only** — `obj.field += 1` and `arr[i] += 1` are parse errors, not silently broken (see design note below) |
 | Indexing   | `arr[i]`, `arr[i] = x` | both are expressions; index-assignment returns the assigned value; also used for map access: `map["key"]` |
 
-No `%` (modulo) operator yet.
+**Design note — why compound assignment is variable-only:** safely supporting `obj.field += 1` requires evaluating `obj` exactly once and reusing it for both the read and the write. The current AST has no clean way to express "evaluate this sub-expression once, use the result twice," so rather than risk silently double-evaluating a target (which could duplicate side effects, e.g. if `obj` were itself a function call), this case is rejected at parse time with a clear error instead.
 
 ## Grammar (EBNF-ish)
 
@@ -62,7 +63,7 @@ method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt | block
+statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt   -> "while" "(" expression ")" statement
 forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
@@ -72,13 +73,15 @@ exprStmt    -> expression ";"
 printStmt   -> "print" expression ";"
 
 expression  -> assignment
-assignment  -> ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) "=" assignment | logicOr
+assignment  -> ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) "=" assignment
+             | IDENTIFIER ( "+=" | "-=" | "*=" | "/=" | "%=" ) assignment
+             | logicOr
 logicOr     -> logicAnd ( "or" logicAnd )*
 logicAnd    -> equality ( "and" equality )*
 equality    -> comparison ( ( "!=" | "==" ) comparison )*
 comparison  -> term ( ( ">" | ">=" | "<" | "<=" ) term )*
 term        -> factor ( ( "-" | "+" ) factor )*
-factor      -> unary ( ( "/" | "*" ) unary )*
+factor      -> unary ( ( "/" | "*" | "%" ) unary )*
 unary       -> ( "!" | "-" ) unary | call
 call        -> primary ( "(" arguments? ")" | "." IDENTIFIER | "[" expression "]" )*
 arguments   -> expression ( "," expression )*
@@ -249,9 +252,10 @@ print grid[0][1];    // 2
   push(b, 4);
   print a; // [1, 2, 3, 4] -- a sees b's mutation
   ```
-- No `arr.method()` syntax — array operations are plain function calls
-  (`push(arr, x)`, not `arr.push(x)`), since arrays are a primitive
-  value type, not objects with a field/method table like class instances.
+- Both **method-call syntax** (`arr.push(x)`) and the equivalent **free
+  function** (`push(arr, x)`) work and are fully interchangeable — method
+  syntax is just a more convenient way to call the same underlying
+  operation. See the Standard Library section below for the full list.
 
 ## Maps
 
@@ -281,8 +285,13 @@ print person;            // {"age": 22, "city": Kathmandu, "name": Knox}
   passing a map shares the underlying data.
 - Iteration order (when printing, or via `keys()`/`values()`) is always
   **sorted by key**, not insertion order — deterministic and easy to test.
-- `.` property access does **not** work on maps (`map.key` is invalid) —
-  only `[]` indexing, same distinction as arrays vs. class instances.
+- Both **method-call syntax** (`map.hasKey(k)`) and the equivalent
+  **free function** (`hasKey(map, k)`) work and are fully interchangeable.
+- **Important distinction**: `.name` is only for calling a *method*
+  (`map.hasKey(...)`) — it is NOT a way to read a stored value by key.
+  `map.name` does not read the `"name"` entry; use `map["name"]` for that.
+  This mirrors the same rule for arrays (`.push()` is a method call,
+  `arr[0]` is how you read a value).
 
 ## Standard library
 
@@ -378,8 +387,7 @@ error messages report line `0` rather than the calling line.
 
 ## Not yet implemented
 
-- `%` modulo, compound assignment (`+=` etc.)
+- Compound assignment on fields/indices (`obj.f += 1`, `arr[i] += 1`) — variables only for now, see design note above
 - Non-string map keys
-- Method-call syntax on arrays/maps (`arr.push(x)`) — currently function-call only
 - An import/module system (everything currently lives in one global scope)
 - Bytecode VM (current implementation is a tree-walking interpreter)

@@ -1,3 +1,4 @@
+// lexer.cpp: Implementation of the Lexer class
 #include "lexer.h"
 #include <iostream>
 
@@ -11,6 +12,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
     {"print", TokenType::PRINT}, {"class", TokenType::CLASS}, {"this", TokenType::THIS},
     {"super", TokenType::SUPER},
 };
+
 Lexer::Lexer(std::string source) : source(std::move(source)) {}
 
 std::vector<Token> Lexer::scanTokens() {
@@ -68,12 +70,13 @@ void Lexer::scanToken() {
         case '[': addToken(TokenType::LEFT_BRACKET); break;
         case ']': addToken(TokenType::RIGHT_BRACKET); break;
         case ',': addToken(TokenType::COMMA); break;
-        case '.': addToken(TokenType::DOT); break;
-        case '-': addToken(TokenType::MINUS); break;
-        case '+': addToken(TokenType::PLUS); break;
-        case ';': addToken(TokenType::SEMICOLON); break;
         case ':': addToken(TokenType::COLON); break;
-        case '*': addToken(TokenType::STAR); break;
+        case '.': addToken(TokenType::DOT); break;
+        case '-': addToken(match('=') ? TokenType::MINUS_EQUAL : TokenType::MINUS); break;
+        case '+': addToken(match('=') ? TokenType::PLUS_EQUAL : TokenType::PLUS); break;
+        case ';': addToken(TokenType::SEMICOLON); break;
+        case '*': addToken(match('=') ? TokenType::STAR_EQUAL : TokenType::STAR); break;
+        case '%': addToken(match('=') ? TokenType::PERCENT_EQUAL : TokenType::PERCENT); break;
 
         case '!': addToken(match('=') ? TokenType::BANG_EQUAL : TokenType::BANG); break;
         case '=': addToken(match('=') ? TokenType::EQUAL_EQUAL : TokenType::EQUAL); break;
@@ -84,6 +87,8 @@ void Lexer::scanToken() {
             if (match('/')) {
                 // comment: consume until end of line
                 while (peek() != '\n' && !isAtEnd()) advance();
+            } else if (match('=')) {
+                addToken(TokenType::SLASH_EQUAL);
             } else {
                 addToken(TokenType::SLASH);
             }

@@ -29,10 +29,7 @@ add_executable(mylang
 
 target_include_directories(mylang PRIVATE src)
 
-# Also copy the built exe to the project root after every build, so
-# `.\mylang.exe` at the top level always matches the latest CMake build
-# (the "real"/canonical binary still lives in build/Debug/ — this is
-# purely a convenience copy).
+# Also copy the built exe to the project root after every build, so the build at root is not stale.
 add_custom_command(TARGET mylang POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:mylang>

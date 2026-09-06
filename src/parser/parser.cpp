@@ -13,8 +13,7 @@
 // statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
-// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
-//                (desugars to a whileStmt; no dedicated AST node)
+// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node)
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
 // exprStmt    -> expression ";"
@@ -36,6 +35,7 @@
 
 #include "parser.h"
 #include <iostream>
+#include <unordered_map>
 
 Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
 
@@ -264,6 +264,32 @@ ExprPtr Parser::assignment() {
         error(equals, "Invalid assignment target.");
     }
 
+    // Compound assignment: x += value  equivalent to  x = x + value.
+    static const std::unordered_map<TokenType, TokenType> compoundOps = {
+        {TokenType::PLUS_EQUAL, TokenType::PLUS},
+        {TokenType::MINUS_EQUAL, TokenType::MINUS},
+        {TokenType::STAR_EQUAL, TokenType::STAR},
+        {TokenType::SLASH_EQUAL, TokenType::SLASH},
+        {TokenType::PERCENT_EQUAL, TokenType::PERCENT},
+    };
+    for (auto& [compoundType, baseType] : compoundOps) {
+        if (match({compoundType})) {
+            Token opToken = previous();
+            ExprPtr value = assignment();
+
+            auto* varExpr = dynamic_cast<Variable*>(expr.get());
+            if (!varExpr) {
+                error(opToken, "Compound assignment is only supported on plain variables (not fields or indices).");
+                return expr;
+            }
+
+            Token name = varExpr->name;
+            Token baseOp(baseType, opToken.lexeme.substr(0, opToken.lexeme.size() - 1), opToken.line);
+            auto binary = std::make_unique<Binary>(std::make_unique<Variable>(name), std::move(baseOp), std::move(value));
+            return std::make_unique<Assign>(std::move(name), std::move(binary));
+        }
+    }
+
     return expr;
 }
 
@@ -319,7 +345,7 @@ ExprPtr Parser::term() {
 
 ExprPtr Parser::factor() {
     ExprPtr expr = unary();
-    while (match({TokenType::SLASH, TokenType::STAR})) {
+    while (match({TokenType::SLASH, TokenType::STAR, TokenType::PERCENT})) {
         Token op = previous();
         ExprPtr right = unary();
         expr = std::make_unique<Binary>(std::move(expr), std::move(op), std::move(right));

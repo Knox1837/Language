@@ -99,6 +99,15 @@ void Interpreter::visitBinaryExpr(Binary& expr) {
             checkNumberOperands(expr.op, left, right);
             result = std::get<double>(left) * std::get<double>(right);
             return;
+        case TokenType::PERCENT:
+            checkNumberOperands(expr.op, left, right);
+            if (std::get<double>(right) == 0.0) {
+                throw RuntimeError(expr.op, "Modulo by zero.");
+            }
+            // fmod (not integer %) since the language's only numeric type is double
+            // matches how JS's % works, including taking the sign of the dividend for negative operands
+            result = std::fmod(std::get<double>(left), std::get<double>(right));
+            return;
         case TokenType::PLUS:
             // '+' overloads: number+number adds, string+string concatenates
             if (std::holds_alternative<double>(left) && std::holds_alternative<double>(right)) {
@@ -254,9 +263,8 @@ void Interpreter::visitWhileStmt(WhileStmt& stmt) {
 }
 
 void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
-    // Capture the CURRENT environment as the closure — this is what lets
-    // the function later see variables from its defining scope even if
-    // called from somewhere else entirely.
+    // Capture the CURRENT environment as the closure 
+    // This is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
     auto function = std::make_shared<UserFunction>(&stmt, environment);
     environment->define(stmt.name.lexeme, function);
 }
