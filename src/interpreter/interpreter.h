@@ -10,16 +10,29 @@
 #include "lox_class.h"
 #include "lox_instance.h"
 
+class ModuleLoader; // forward declared to avoid a circular include with module_loader.h
+
 class Interpreter : public ExprVisitor, public StmtVisitor {
 public:
     Interpreter();
+    ~Interpreter(); // defined in interpreter.cpp, where ModuleLoader is a complete type (needed because unique_ptr<ModuleLoader>'s destructor requires the full definition, which this header only forward-declares)
+
+    // Exposes the global scope so ModuleLoader can wrap it in a ModuleObject after running an imported file's top-level code.
+    std::shared_ptr<Environment> getGlobalEnvironment() const { return environment; }
+
+    // Called once by main.cpp after construction, with the directory the top-level script lives in 
+    void setModuleBaseDir(const std::string& dir);
+
+    // Used by ModuleLoader itself when running an imported file in a fresh Interpreter, so that the imported file's own imports resolve relative to its own directory rather than the importing script's directory.
+    void setSharedModuleLoader(std::shared_ptr<ModuleLoader> loader);
 
     // Entry point: executes a whole program (list of top-level statements).
     // Catches RuntimeError internally and reports it, matching how a real script runner behaves (one runtime error stops execution and prints it).
     void interpret(const std::vector<StmtPtr>& statements);
 
     // Runs `statements` in a fresh scope chained to `newEnv`'s parent chain.
-    // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope.
+    // Public because UserFunction::call() needs it to run a function body
+    // in a scope chained to the function's closure, not the caller's scope.
     void executeBlock(const std::vector<StmtPtr>& statements, std::shared_ptr<Environment> newEnv);
 
     // expression visitors: each computes a Value and stores it in `result`
@@ -52,9 +65,11 @@ public:
     void visitFunctionStmt(FunctionStmt& stmt) override;
     void visitReturnStmt(ReturnStmt& stmt) override;
     void visitClassStmt(ClassStmt& stmt) override;
+    void visitImportStmt(ImportStmt& stmt) override;
 
 private:
     std::shared_ptr<Environment> environment; // current scope; starts as globals
+    std::shared_ptr<ModuleLoader> moduleLoader; // shared across the whole import graph, not per-file
 
     Value result; // scratch slot: evaluate() reads this after accept() runs
 

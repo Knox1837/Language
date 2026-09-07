@@ -17,6 +17,8 @@ add_executable(mylang
     src/interpreter/lox_instance.cpp
     src/interpreter/array_methods.cpp
     src/interpreter/map_methods.cpp
+    src/interpreter/module_object.cpp
+    src/interpreter/module_loader.cpp
     src/stdlib/native_function.cpp
     src/stdlib/math_lib.cpp
     src/stdlib/string_lib.cpp

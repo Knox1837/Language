@@ -9,6 +9,8 @@
 #include "map_object.h"
 #include "array_methods.h"
 #include "map_methods.h"
+#include "module_loader.h"
+#include "module_object.h"
 #include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
@@ -16,6 +18,16 @@
 Interpreter::Interpreter() {
     environment = std::make_shared<Environment>(); // the global scope
     registerStdlib(environment); // clock, abs, sqrt, len, upper, input, etc.
+}
+
+Interpreter::~Interpreter() = default; // must live here, not the header — see interpreter.h's comment
+
+void Interpreter::setModuleBaseDir(const std::string& dir) {
+    moduleLoader = std::make_shared<ModuleLoader>(dir);
+}
+
+void Interpreter::setSharedModuleLoader(std::shared_ptr<ModuleLoader> loader) {
+    moduleLoader = std::move(loader);
 }
 
 void Interpreter::interpret(const std::vector<StmtPtr>& statements) {
@@ -79,7 +91,9 @@ void Interpreter::visitUnaryExpr(Unary& expr) {
     }
 }
 
-// Shared arithmetic logic for +, -, *, /, % — used by both plain binary expressions (a + b) and compound assignment (a += b)
+// Shared arithmetic logic for +, -, *, /, % — used by both plain binary
+// expressions (a + b) and compound assignment (a += b), so the two stay
+// perfectly consistent and this logic isn't duplicated.
 Value Interpreter::applyArithmeticOp(TokenType op, const Token& opToken, const Value& left, const Value& right) {
     switch (op) {
         case TokenType::MINUS:
@@ -216,8 +230,12 @@ void Interpreter::visitGetExpr(Get& expr) {
         result = getMapMethod(std::get<std::shared_ptr<MapObject>>(object), expr.name);
         return;
     }
+    if (std::holds_alternative<std::shared_ptr<ModuleObject>>(object)) {
+        result = std::get<std::shared_ptr<ModuleObject>>(object)->get(expr.name);
+        return;
+    }
 
-    throw RuntimeError(expr.name, "Only instances, arrays, and maps have properties.");
+    throw RuntimeError(expr.name, "Only instances, arrays, maps, and modules have properties.");
 }
 
 void Interpreter::visitSetExpr(Set& expr) {
@@ -288,8 +306,9 @@ void Interpreter::visitWhileStmt(WhileStmt& stmt) {
 }
 
 void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
-    // Capture the CURRENT environment as the closure 
-    // This is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
+    // Capture the CURRENT environment as the closure — this is what lets
+    // the function later see variables from its defining scope even if
+    // called from somewhere else entirely.
     auto function = std::make_shared<UserFunction>(&stmt, environment);
     environment->define(stmt.name.lexeme, function);
 }
@@ -336,6 +355,14 @@ void Interpreter::visitClassStmt(ClassStmt& stmt) {
 
     auto klass = std::make_shared<LoxClass>(stmt.name.lexeme, superclass, std::move(methods));
     environment->assign(stmt.name, Value{klass});
+}
+
+void Interpreter::visitImportStmt(ImportStmt& stmt) {
+    if (!moduleLoader) {
+        throw RuntimeError(stmt.path, "Imports are not available in this context (no base directory set).");
+    }
+    Value moduleValue = moduleLoader->load(stmt.path.lexeme, stmt.path, *this);
+    environment->define(stmt.alias.lexeme, moduleValue);
 }
 
 void Interpreter::visitSuperExpr(Super& expr) {

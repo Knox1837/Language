@@ -51,6 +51,7 @@ std::vector<StmtPtr> Parser::parse() {
 
 StmtPtr Parser::declaration() {
     try {
+        if (match({TokenType::IMPORT})) return importDeclaration();
         if (match({TokenType::CLASS})) return classDeclaration();
         if (match({TokenType::DEF})) return functionDeclaration();
         if (match({TokenType::VAR})) return varDeclaration();
@@ -59,6 +60,14 @@ StmtPtr Parser::declaration() {
         synchronize();
         return nullptr; // caller should skip nulls; kept simple for this stage
     }
+}
+
+StmtPtr Parser::importDeclaration() {
+    Token path = consume(TokenType::STRING, "Expect a string file path after 'import'.");
+    consume(TokenType::AS, "Expect 'as' after import path.");
+    Token alias = consume(TokenType::IDENTIFIER, "Expect a name after 'as'.");
+    consume(TokenType::SEMICOLON, "Expect ';' after import statement.");
+    return std::make_unique<ImportStmt>(std::move(path), std::move(alias));
 }
 
 StmtPtr Parser::classDeclaration() {
@@ -256,7 +265,7 @@ ExprPtr Parser::assignment() {
             return std::make_unique<Set>(std::move(getExpr->object), getExpr->name, std::move(value));
         }
         if (auto* indexExpr = dynamic_cast<Index*>(expr.get())) {
-            // "a[i] = c" parses as Index(a, i) first, then reinterpreted as IndexSet here: same trick as Get/Set above
+            // "a[i] = c" parses as Index(a, i) first, then reinterpreted as IndexSet here, same trick as Get/Set above.
             return std::make_unique<IndexSet>(std::move(indexExpr->object), indexExpr->bracket,
                                                std::move(indexExpr->indexExpr), std::move(value));
         }
@@ -527,6 +536,7 @@ void Parser::synchronize() {
             case TokenType::DEF:
             case TokenType::CLASS:
             case TokenType::RETURN:
+            case TokenType::IMPORT:
                 return;
             default:
                 break;

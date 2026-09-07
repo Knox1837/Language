@@ -25,6 +25,7 @@ private:
 
     // statement grammar rules
     StmtPtr declaration();      // "class" decl, "def" function, "var" declaration, or falls through to statement()
+    StmtPtr importDeclaration(); // "import" STRING "as" IDENTIFIER ";"
     StmtPtr classDeclaration(); // "class" IDENTIFIER "{" function* "}"
     std::unique_ptr<FunctionStmt> functionBody(const std::string& kind); // shared by top-level "def" and class methods
     StmtPtr functionDeclaration(); // "def" IDENTIFIER "(" params? ")" block -- wraps functionBody()

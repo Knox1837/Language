@@ -13,6 +13,7 @@ struct WhileStmt;
 struct FunctionStmt;
 struct ReturnStmt;
 struct ClassStmt;
+struct ImportStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -24,6 +25,7 @@ struct StmtVisitor {
     virtual void visitFunctionStmt(FunctionStmt& stmt) = 0;
     virtual void visitReturnStmt(ReturnStmt& stmt) = 0;
     virtual void visitClassStmt(ClassStmt& stmt) = 0;
+    virtual void visitImportStmt(ImportStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -111,4 +113,12 @@ struct ClassStmt : Stmt {
     ClassStmt(Token name, ExprPtr superclass, std::vector<std::unique_ptr<FunctionStmt>> methods)
         : name(std::move(name)), superclass(std::move(superclass)), methods(std::move(methods)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitClassStmt(*this); }
+};
+
+// import "path/to/file.mylang" as name;
+struct ImportStmt : Stmt {
+    Token path;  // the STRING token holding the file path, as written in source
+    Token alias; // the IDENTIFIER after "as" — what the module is bound to locally
+    ImportStmt(Token path, Token alias) : path(std::move(path)), alias(std::move(alias)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitImportStmt(*this); }
 };

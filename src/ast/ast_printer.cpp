@@ -197,3 +197,7 @@ void ASTPrinter::visitClassStmt(ClassStmt& stmt) {
     out << ")";
     result = out.str();
 }
+
+void ASTPrinter::visitImportStmt(ImportStmt& stmt) {
+    result = "(import \"" + stmt.path.lexeme + "\" as " + stmt.alias.lexeme + ")";
+}

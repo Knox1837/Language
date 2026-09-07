@@ -5,6 +5,7 @@
 #include "lox_instance.h"
 #include "array_object.h"
 #include "map_object.h"
+#include "module_object.h"
 
 std::string stringifyValue(const Value& value) {
     if (std::holds_alternative<std::monostate>(value)) return "nil";
@@ -44,6 +45,9 @@ std::string stringifyValue(const Value& value) {
         }
         out += "}";
         return out;
+    }
+    if (std::holds_alternative<std::shared_ptr<ModuleObject>>(value)) {
+        return "<module>";
     }
     return std::get<std::string>(value);
 }

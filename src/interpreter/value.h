@@ -1,8 +1,6 @@
-#pragma once
-// value.h: the runtime Value type. 
-// Extends the AST's LiteralValue with two more alternatives: a callable (function/class) and an instance.
+// value.h: the runtime Value type. Extends the AST's LiteralValue with two more alternatives: a callable (function/class) and an instance.
 // A Value is always one of nil / number / bool / string / callable / instance.
-
+#pragma once
 #include <memory>
 #include "../ast/expr.h"
 
@@ -10,10 +8,12 @@ class Callable;     // callable.h — functions AND classes (calling a class con
 class LoxInstance;   // lox_instance.h — a runtime object with fields, created from a class
 class ArrayObject;   // array_object.h — a runtime array, holding a vector<Value>
 class MapObject;      // map_object.h — a runtime map/dictionary with string keys
+class ModuleObject;   // module_object.h — a namespace object created by `import ... as name`
 
 using Value = std::variant<std::monostate, double, bool, std::string,
                             std::shared_ptr<Callable>, std::shared_ptr<LoxInstance>,
-                            std::shared_ptr<ArrayObject>, std::shared_ptr<MapObject>>;
+                            std::shared_ptr<ArrayObject>, std::shared_ptr<MapObject>,
+                            std::shared_ptr<ModuleObject>>;
 
 // Converts a parse-time LiteralValue (nil/number/bool/string only) into a runtime Value (which has extra alternatives for functions/instances).
 // Needed because the two variants have different alternative sets, so C++ won't convert between them implicitly.
@@ -22,6 +22,7 @@ inline Value fromLiteral(const LiteralValue& lit) {
 }
 
 // True if the value is "truthy" for if/while/and/or purposes.
+// This language's rule: nil and false are falsey, everything else truthy (matches Lox/Ruby-style truthiness, not C's "0 is false").
 inline bool isTruthy(const Value& value) {
     if (std::holds_alternative<std::monostate>(value)) return false;
     if (std::holds_alternative<bool>(value)) return std::get<bool>(value);
@@ -29,4 +30,5 @@ inline bool isTruthy(const Value& value) {
 }
 
 // Converts a runtime value to its printable string form (used by `print`).
+// Declared here, defined in value.cpp because it needs Callable::toString() and LoxInstance::toString(), which aren't fully defined until their own headers.
 std::string stringifyValue(const Value& value);
