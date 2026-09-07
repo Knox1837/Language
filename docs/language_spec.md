@@ -2,7 +2,7 @@
 
 Status: living document. Update this whenever a language feature changes.
 Currently covers: lexer, parser, tree-walking interpreter, functions &
-closures, classes, inheritance, standard library, arrays, maps.
+closures, classes, inheritance, standard library, arrays, maps, imports.
 
 ## Overview
 
@@ -15,7 +15,7 @@ declarations (`def`, no return-type annotations).
 ```
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
-class     this      super
+class     this      super     import    as
 ```
 
 ## Data types
@@ -31,6 +31,7 @@ class     this      super
 | instance | (result of calling a class) | holds fields, created dynamically on first assignment |
 | array  | `[1, 2, 3]`    | reference type — assigning or passing an array shares the same underlying data, like instances |
 | map    | `{"key": val}` | reference type; **string keys only** (see design note below) |
+| module | (result of `import ... as name`) | a namespace exposing the imported file's top-level `def`/`class`/`var` bindings via `.` |
 
 ## Truthiness
 
@@ -57,7 +58,8 @@ where `0` is falsey.)
 
 ```
 program     -> declaration* EOF
-declaration -> classDecl | funDecl | varDecl | statement
+declaration -> importDecl | classDecl | funDecl | varDecl | statement
+importDecl  -> "import" STRING "as" IDENTIFIER ";"
 classDecl   -> "class" IDENTIFIER ( "<" IDENTIFIER )? "{" method* "}"
 method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
@@ -293,6 +295,44 @@ print person;            // {"age": 22, "city": Kathmandu, "name": Knox}
   This mirrors the same rule for arrays (`.push()` is a method call,
   `arr[0]` is how you read a value).
 
+## Imports
+
+```
+// math_utils.mylang
+def square(x) { return x * x; }
+var PI_APPROX = 3.14;
+
+// main.mylang
+import "math_utils.mylang" as math;
+print math.square(5);      // 25
+print math.PI_APPROX;      // 3.14
+```
+
+- `import "path" as name` runs the imported file's top-level code once
+  and binds `name` to a **module object** — accessing anything the file
+  defined at its top level (`def`, `class`, `var`) goes through `.`,
+  exactly like a class instance's fields/methods.
+- **Caching**: importing the same resolved file path twice (from
+  anywhere in the program, including from within another imported file)
+  returns the **same** module object rather than re-running the file. A
+  file's top-level code — including any `print` statements or other
+  side effects it contains — only ever executes once per program run.
+- **Isolation**: each imported file runs in its own fresh global scope.
+  It cannot see or accidentally modify the importing script's variables,
+  and the importing script can't see the imported file's variables
+  except through the module object's namespace.
+- **Circular imports** (file A imports B, which imports A) are detected
+  and reported as a runtime error rather than infinite-looping.
+- **Path resolution (first-pass design)**: relative import paths always
+  resolve against the **top-level script's** directory — including
+  `import` statements written inside an already-imported file. This is
+  simpler than per-file relative resolution (how Node/Python do it) and
+  correct for the common case of a project's `.mylang` files living in
+  one flat directory. Per-file-relative resolution is a reasonable
+  future expansion, not yet implemented.
+- In the REPL (no script file), imports resolve relative to the current
+  working directory.
+
 ## Standard library
 
 A set of native (C++-implemented) built-in functions are available
@@ -386,6 +426,7 @@ error messages report line `0` rather than the calling line.
   and halt execution of that script/REPL line.
 
 ## Not yet implemented
+
 - Non-string map keys
-- An import/module system (everything currently lives in one global scope)
+- Per-file-relative import path resolution (currently all imports resolve against the top-level script's directory — see Imports section above)
 - Bytecode VM (current implementation is a tree-walking interpreter)
