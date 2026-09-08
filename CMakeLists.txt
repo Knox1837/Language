@@ -27,8 +27,10 @@ add_executable(mylang
     src/stdlib/type_lib.cpp
     src/stdlib/map_lib.cpp
     src/stdlib/stdlib.cpp
+    src/vm/chunk.cpp
+    src/vm/compiler.cpp
+    src/vm/vm.cpp
 )
-
 target_include_directories(mylang PRIVATE src)
 
 # Also copy the built exe to the project root after every build, so the build at root is not stale.
