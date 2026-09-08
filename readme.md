@@ -19,7 +19,10 @@ cmake --build build
 ```bash
 ./mylang path/to/script.mylang
 ```
-
+**Run with bytecode VM:**
+```bash
+./mylang --vm path/to/script.mylang
+```
 **Start the REPL (no file argument):**
 ```bash
 ./mylang
