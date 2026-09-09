@@ -15,14 +15,39 @@ bool Compiler::compile(const std::string& source, Chunk& chunk) {
     hadError = false;
 
     while (!isAtEnd()) {
-        statement();
+        declaration();
     }
 
     emitByte(OpCode::OP_RETURN);
     return !hadError;
 }
 
-// statements
+// declarations & statements
+
+void Compiler::declaration() {
+    if (match(TokenType::VAR)) {
+        varDeclaration();
+    } else {
+        statement();
+    }
+}
+
+void Compiler::varDeclaration() {
+    consume(TokenType::IDENTIFIER, "Expect variable name.");
+    uint8_t nameConstant = identifierConstant(previous());
+
+    if (match(TokenType::EQUAL)) {
+        expression();
+    } else {
+        // "var x;" with no initializer -> nil, matching the tree-walker's default. 
+        emitConstant(VMValue{std::monostate{}});
+    }
+
+    consume(TokenType::SEMICOLON, "Expect ';' after variable declaration.");
+
+    emitByte(OpCode::OP_DEFINE_GLOBAL);
+    emitByte(nameConstant);
+}
 
 void Compiler::statement() {
     if (match(TokenType::PRINT)) {
@@ -41,12 +66,14 @@ void Compiler::printStatement() {
 void Compiler::expressionStatement() {
     expression();
     consume(TokenType::SEMICOLON, "Expect ';' after expression.");
+    // Discard the expression's unused result, matching the tree-walker's ExpressionStmt (evaluate and discard) 
+    emitByte(OpCode::OP_POP);
 }
 
 // expressions (Pratt parsing)
 
 void Compiler::expression() {
-    parsePrecedence(Precedence::TERM);
+    parsePrecedence(Precedence::ASSIGNMENT);
 }
 
 void Compiler::parsePrecedence(Precedence precedence) {
@@ -56,26 +83,35 @@ void Compiler::parsePrecedence(Precedence precedence) {
         errorAt(previous(), "Expect expression.");
         return;
     }
-    (this->*prefixRule)();
+
+    // Only allow the expression we're about to parse to be treated as an assignment TARGET if we were entered at ASSIGNMENT precedence or lower
+    bool canAssign = precedence <= Precedence::ASSIGNMENT;
+    (this->*prefixRule)(canAssign);
 
     while (precedence <= getRule(peek().type).precedence) {
         advance();
         ParseFn infixRule = getRule(previous().type).infix;
-        (this->*infixRule)();
+        (this->*infixRule)(canAssign);
+    }
+
+    // If canAssign was true but nothing consumed the "=" (e.g. the parsed expression wasn't a valid assignment target)
+    // a stray "=" left over here is a real error rather than silently ignored.
+    if (canAssign && match(TokenType::EQUAL)) {
+        errorAt(previous(), "Invalid assignment target.");
     }
 }
 
-void Compiler::number() {
+void Compiler::number(bool) {
     double value = std::stod(previous().lexeme);
     emitConstant(value);
 }
 
-void Compiler::grouping() {
+void Compiler::grouping(bool) {
     expression();
     consume(TokenType::RIGHT_PAREN, "Expect ')' after expression.");
 }
 
-void Compiler::unary() {
+void Compiler::unary(bool) {
     TokenType opType = previous().type;
     parsePrecedence(Precedence::UNARY); // compile the operand
     if (opType == TokenType::MINUS) {
@@ -83,7 +119,7 @@ void Compiler::unary() {
     }
 }
 
-void Compiler::binary() {
+void Compiler::binary(bool) {
     TokenType opType = previous().type;
     const ParseRule& rule = getRule(opType);
     // +1 so same-precedence operators are left-associative: 
@@ -99,6 +135,26 @@ void Compiler::binary() {
     }
 }
 
+void Compiler::variable(bool canAssign) {
+    uint8_t nameConstant = identifierConstant(previous());
+
+    if (canAssign && match(TokenType::EQUAL)) {
+        expression();
+        emitByte(OpCode::OP_SET_GLOBAL);
+        emitByte(nameConstant);
+    } else {
+        emitByte(OpCode::OP_GET_GLOBAL);
+        emitByte(nameConstant);
+    }
+}
+
+uint8_t Compiler::identifierConstant(const Token& name) {
+    // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a
+    // number literal is stored as a VMValue double.
+    int index = chunkOut->addConstant(VMValue{name.lexeme});
+    return static_cast<uint8_t>(index);
+}
+
 // parse rule table
 // One entry per TokenType this increment cares about; 
 // every other token type gets {nullptr, nullptr, NONE} via the default-constructed fallback in getRule().
@@ -110,10 +166,12 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule termRule     = { nullptr,             &Compiler::binary, Precedence::TERM };
     static const ParseRule factorRule   = { nullptr,             &Compiler::binary, Precedence::FACTOR };
     static const ParseRule minusRule    = { &Compiler::unary,    &Compiler::binary, Precedence::TERM }; // '-' is BOTH unary and binary
+    static const ParseRule variableRule = { &Compiler::variable, nullptr,          Precedence::NONE };
     static const ParseRule noRule       = { nullptr,             nullptr,          Precedence::NONE };
 
     switch (type) {
         case TokenType::NUMBER:      return numberRule;
+        case TokenType::IDENTIFIER:  return variableRule;
         case TokenType::LEFT_PAREN:  return groupingRule;
         case TokenType::MINUS:       return minusRule;
         case TokenType::PLUS:        return termRule;

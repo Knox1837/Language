@@ -1,7 +1,7 @@
 // compiler.h — a single-pass Pratt parser that reads tokens (reusing the existing Lexer/Token from src/lexer/) and emits bytecode directly into a Chunk, with no separate AST step.
 #pragma once
 #include <vector>
-#include <functional>
+#include <string>
 #include "../lexer/token.h"
 #include "chunk.h"
 
@@ -16,16 +16,19 @@ private:
     Chunk* chunkOut = nullptr;
     bool hadError = false;
 
-    // Precedence levels, lowest to highest: mirrors the tree-walker's grammar (equality/comparison/term/factor/unary), collapsed into one table-driven climb instead of one recursive function per level.
+    // Precedence levels, lowest to highest.
     enum class Precedence {
         NONE,
+        ASSIGNMENT, // =
         TERM,       // + -
         FACTOR,     // * /
         UNARY,      // -x
         PRIMARY
     };
 
-    using ParseFn = void (Compiler::*)();
+    // Prefix/infix rules take a `canAssign` flag: true only when the expression being parsed could legally be an assignment target
+
+    using ParseFn = void (Compiler::*)(bool canAssign);
     struct ParseRule {
         ParseFn prefix;
         ParseFn infix;
@@ -35,15 +38,21 @@ private:
 
     void parsePrecedence(Precedence precedence);
     void expression();
+    void declaration();
+    void varDeclaration();
     void statement();
     void printStatement();
     void expressionStatement();
 
     // Prefix/infix parse rules: each assumes the relevant token was just consumed (`previous()`), and emits bytecode for it.
-    void number();
-    void grouping();
-    void unary();
-    void binary();
+    void number(bool canAssign);
+    void grouping(bool canAssign);
+    void unary(bool canAssign);
+    void binary(bool canAssign);
+    void variable(bool canAssign);
+
+    // Reads a variable name from `name`, adds it to the constant pool as a string, and returns its constant index
+    uint8_t identifierConstant(const Token& name);
 
     // token-stream helpers (same shape as the tree-walker's Parser)
     const Token& peek() const;

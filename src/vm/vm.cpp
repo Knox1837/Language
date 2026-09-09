@@ -2,9 +2,10 @@
 #include "vm.h"
 #include "compiler.h"
 #include <iostream>
+#include <sstream>
 
 InterpretResult VM::interpret(const std::string& source) {
-    chunk = Chunk(); // fresh chunk per call
+    chunk = Chunk(); // fresh chunk per call — fine for now; a REPL that wants to preserve state across lines is a later concern
     ip = 0;
 
     Compiler compiler;
@@ -24,13 +25,25 @@ VMValue VM::readConstant() {
 }
 
 void VM::push(VMValue value) {
-    stack.push_back(value);
+    stack.push_back(std::move(value));
 }
 
 VMValue VM::pop() {
-    VMValue value = stack.back();
+    VMValue value = std::move(stack.back());
     stack.pop_back();
     return value;
+}
+
+const VMValue& VM::peekStack(int distanceFromTop) const {
+    return stack[stack.size() - 1 - distanceFromTop];
+}
+
+bool VM::requireNumbers(const VMValue& a, const VMValue& b, const char* opName) {
+    if (isVMNumber(a) && isVMNumber(b)) return true;
+    std::ostringstream msg;
+    msg << "Operands to '" << opName << "' must be numbers.";
+    runtimeError(msg.str());
+    return false;
 }
 
 void VM::runtimeError(const std::string& message) {
@@ -44,45 +57,89 @@ InterpretResult VM::run() {
 
         switch (instruction) {
             case OpCode::OP_CONSTANT: {
-                VMValue constant = readConstant();
-                push(constant);
+                push(readConstant());
                 break;
             }
             case OpCode::OP_ADD: {
+                // '+' is currently number-only in the VM (no string concatenation yet) 
                 VMValue b = pop();
                 VMValue a = pop();
-                push(a + b);
+                if (!requireNumbers(a, b, "+")) return InterpretResult::RUNTIME_ERROR;
+                push(asVMNumber(a) + asVMNumber(b));
                 break;
             }
             case OpCode::OP_SUBTRACT: {
                 VMValue b = pop();
                 VMValue a = pop();
-                push(a - b);
+                if (!requireNumbers(a, b, "-")) return InterpretResult::RUNTIME_ERROR;
+                push(asVMNumber(a) - asVMNumber(b));
                 break;
             }
             case OpCode::OP_MULTIPLY: {
                 VMValue b = pop();
                 VMValue a = pop();
-                push(a * b);
+                if (!requireNumbers(a, b, "*")) return InterpretResult::RUNTIME_ERROR;
+                push(asVMNumber(a) * asVMNumber(b));
                 break;
             }
             case OpCode::OP_DIVIDE: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (b == 0.0) {
+                if (!requireNumbers(a, b, "/")) return InterpretResult::RUNTIME_ERROR;
+                if (asVMNumber(b) == 0.0) {
                     runtimeError("Division by zero.");
                     return InterpretResult::RUNTIME_ERROR;
                 }
-                push(a / b);
+                push(asVMNumber(a) / asVMNumber(b));
                 break;
             }
             case OpCode::OP_NEGATE: {
-                push(-pop());
+                VMValue a = pop();
+                if (!isVMNumber(a)) {
+                    runtimeError("Operand to unary '-' must be a number.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                push(-asVMNumber(a));
                 break;
             }
             case OpCode::OP_PRINT: {
                 VMValue value = pop();
-                std::cout << value << "\n";
+                if (isVMNumber(value)) {
+                    std::cout << asVMNumber(value) << "\n";
+                } else if (isVMString(value)) {
+                    std::cout << asVMString(value) << "\n";
+                } else {
+                    std::cout << "nil\n";
+                }
+                break;
+            }
+            case OpCode::OP_POP: {
+                pop();
+                break;
+            }
+            case OpCode::OP_DEFINE_GLOBAL: {
+                std::string name = asVMString(readConstant());
+                globals[name] = pop();
+                break;
+            }
+            case OpCode::OP_GET_GLOBAL: {
+                std::string name = asVMString(readConstant());
+                auto it = globals.find(name);
+                if (it == globals.end()) {
+                    runtimeError("Undefined variable '" + name + "'.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                push(it->second);
+                break;
+            }
+            case OpCode::OP_SET_GLOBAL: {
+                std::string name = asVMString(readConstant());
+                if (globals.find(name) == globals.end()) {
+                    runtimeError("Undefined variable '" + name + "'.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                // Assignment is itself an expression (matches the tree-walker's Assign node)
+                globals[name] = peekStack(0);
                 break;
             }
             case OpCode::OP_RETURN: {
