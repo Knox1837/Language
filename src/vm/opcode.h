@@ -1,6 +1,5 @@
 // opcode.h: the instruction set. 
 // Each opcode is one byte with some followed by operands
-
 #pragma once
 #include <cstdint>
 
@@ -17,5 +16,7 @@ enum class OpCode : uint8_t {
     OP_GET_GLOBAL,     // look up the name at chunk.constants[operand] in globals, push its value
     OP_SET_GLOBAL,     // peek (don't pop) the top of stack, store it into the EXISTING global named
                         // at chunk.constants[operand] — errors if that global was never defined
+    OP_GET_LOCAL,      // push a COPY of stack[operand] (a local variable's slot on the value stack itself)
+    OP_SET_LOCAL,      // peek (don't pop) the top of stack, store it into stack[operand]
     OP_RETURN,         // stop execution (temporary — real semantics come with functions)
 };

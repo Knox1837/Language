@@ -13,6 +13,8 @@ bool Compiler::compile(const std::string& source, Chunk& chunk) {
     current = 0;
     chunkOut = &chunk;
     hadError = false;
+    locals.clear();
+    scopeDepth = 0;
 
     while (!isAtEnd()) {
         declaration();
@@ -34,7 +36,10 @@ void Compiler::declaration() {
 
 void Compiler::varDeclaration() {
     consume(TokenType::IDENTIFIER, "Expect variable name.");
-    uint8_t nameConstant = identifierConstant(previous());
+    Token nameToken = previous();
+
+    declareVariable(nameToken);
+    uint8_t globalConstant = (scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
     if (match(TokenType::EQUAL)) {
         expression();
@@ -45,16 +50,80 @@ void Compiler::varDeclaration() {
 
     consume(TokenType::SEMICOLON, "Expect ';' after variable declaration.");
 
+    defineVariable(globalConstant);
+}
+
+void Compiler::declareVariable(const Token& name) {
+    if (scopeDepth == 0) return; // globals aren't tracked in `locals` at all
+
+    // Disallow redeclaring the same name twice in the SAME block
+    // e.g. "{ var a = 1; var a = 2; }"  
+    for (int i = static_cast<int>(locals.size()) - 1; i >= 0; i--) {
+        if (locals[i].depth != -1 && locals[i].depth < scopeDepth) break;
+        if (locals[i].name.lexeme == name.lexeme) {
+            errorAt(name, "A variable with this name already exists in this scope.");
+            return;
+        }
+    }
+    locals.push_back(LocalVar{name, -1});
+}
+
+void Compiler::defineVariable(uint8_t globalConstant) {
+    if (scopeDepth > 0) {
+        // A local doesn't need a runtime "define" instruction at all.
+        // its value is already sitting on the stack exactly where it needs to be 
+        locals.back().depth = scopeDepth;
+        return;
+    }
     emitByte(OpCode::OP_DEFINE_GLOBAL);
-    emitByte(nameConstant);
+    emitByte(globalConstant);
+}
+
+int Compiler::resolveLocal(const Token& name) {
+    // Search backward (innermost/most-recently-declared first) so shadowing resolves to the closest enclosing declaration.
+    for (int i = static_cast<int>(locals.size()) - 1; i >= 0; i--) {
+        if (locals[i].name.lexeme == name.lexeme) {
+            if (locals[i].depth == -1) {
+                errorAt(name, "Cannot read a local variable in its own initializer.");
+                return -1;
+            }
+            return i; // this local's slot IS its index in `locals`,
+                      // which mirrors its actual position on the VM stack
+        }
+    }
+    return -1; // not a local — caller falls back to treating it as a global
+}
+
+void Compiler::beginScope() {
+    scopeDepth++;
+}
+
+void Compiler::endScope() {
+    scopeDepth--;
+    // Pop every local that belonged to the block just exited.
+    while (!locals.empty() && locals.back().depth > scopeDepth) {
+        emitByte(OpCode::OP_POP);
+        locals.pop_back();
+    }
 }
 
 void Compiler::statement() {
     if (match(TokenType::PRINT)) {
         printStatement();
+    } else if (match(TokenType::LEFT_BRACE)) {
+        beginScope();
+        block();
+        endScope();
     } else {
         expressionStatement();
     }
+}
+
+void Compiler::block() {
+    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+        declaration();
+    }
+    consume(TokenType::RIGHT_BRACE, "Expect '}' after block.");
 }
 
 void Compiler::printStatement() {
@@ -106,6 +175,11 @@ void Compiler::number(bool) {
     emitConstant(value);
 }
 
+void Compiler::stringLiteral(bool) {
+    // The lexer already strips the surrounding quotes when it produces the STRING token's lexeme, so we can just store it directly as a VMValue string.
+    emitConstant(VMValue{previous().lexeme});
+}
+
 void Compiler::grouping(bool) {
     expression();
     consume(TokenType::RIGHT_PAREN, "Expect ')' after expression.");
@@ -136,15 +210,28 @@ void Compiler::binary(bool) {
 }
 
 void Compiler::variable(bool canAssign) {
-    uint8_t nameConstant = identifierConstant(previous());
+    Token name = previous();
+    int localSlot = resolveLocal(name);
+
+    OpCode getOp, setOp;
+    uint8_t operand;
+    if (localSlot != -1) {
+        getOp = OpCode::OP_GET_LOCAL;
+        setOp = OpCode::OP_SET_LOCAL;
+        operand = static_cast<uint8_t>(localSlot);
+    } else {
+        getOp = OpCode::OP_GET_GLOBAL;
+        setOp = OpCode::OP_SET_GLOBAL;
+        operand = identifierConstant(name);
+    }
 
     if (canAssign && match(TokenType::EQUAL)) {
         expression();
-        emitByte(OpCode::OP_SET_GLOBAL);
-        emitByte(nameConstant);
+        emitByte(setOp);
+        emitByte(operand);
     } else {
-        emitByte(OpCode::OP_GET_GLOBAL);
-        emitByte(nameConstant);
+        emitByte(getOp);
+        emitByte(operand);
     }
 }
 
@@ -161,6 +248,7 @@ uint8_t Compiler::identifierConstant(const Token& name) {
 
 const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule numberRule   = { &Compiler::number,   nullptr,          Precedence::NONE };
+    static const ParseRule stringRule   = { &Compiler::stringLiteral, nullptr,     Precedence::NONE };
     static const ParseRule groupingRule = { &Compiler::grouping, nullptr,          Precedence::NONE };
     static const ParseRule unaryRule    = { &Compiler::unary,    nullptr,          Precedence::NONE };
     static const ParseRule termRule     = { nullptr,             &Compiler::binary, Precedence::TERM };
@@ -171,6 +259,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
 
     switch (type) {
         case TokenType::NUMBER:      return numberRule;
+        case TokenType::STRING:      return stringRule;
         case TokenType::IDENTIFIER:  return variableRule;
         case TokenType::LEFT_PAREN:  return groupingRule;
         case TokenType::MINUS:       return minusRule;
@@ -226,7 +315,8 @@ void Compiler::errorAt(const Token& token, const std::string& message) {
 // bytecode emission
 
 int Compiler::currentLine() const {
-    // previous() is the token most recently consumed: attributing emitted bytecode to it gives reasonable line numbers for errors.
+    // previous() is the token most recently consumed — attributing
+    // emitted bytecode to it gives reasonable line numbers for errors.
     return current > 0 ? tokens[current - 1].line : 0;
 }
 

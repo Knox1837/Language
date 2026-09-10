@@ -142,6 +142,18 @@ InterpretResult VM::run() {
                 globals[name] = peekStack(0);
                 break;
             }
+            case OpCode::OP_GET_LOCAL: {
+                // A local's "address" is a stack index, resolved entirely at compile time.
+                uint8_t slot = readByte();
+                push(stack[slot]);
+                break;
+            }
+            case OpCode::OP_SET_LOCAL: {
+                uint8_t slot = readByte();
+                // Same "peek, don't pop" reasoning as OP_SET_GLOBAL- assignment is an expression, so its value stays on top of the stack for whatever comes next.
+                stack[slot] = peekStack(0);
+                break;
+            }
             case OpCode::OP_RETURN: {
                 return InterpretResult::OK;
             }
