@@ -25,21 +25,22 @@ statement). This is how CPython, Lua, and the JVM all work internally.
 
 ## Current status
 
-Implemented: number literals, unary `-`, binary `+ - * /` with correct
-precedence and left-associativity, parenthesized grouping, `print`,
-**global variables** (`var name = expr;`, reads, and assignment —
-including assignment-as-expression, e.g. `b = (a = 5)`).
+Implemented: number literals, string literals, unary `-`, binary
+`+ - * /` with correct precedence and left-associativity, parenthesized
+grouping, `print`, global variables, **block statements (`{ ... }`) and
+local variables with real lexical scoping** — locals are resolved to a
+fixed stack-slot index at COMPILE time (a single array access at
+runtime), not looked up by name like globals still are. Shadowing,
+nested blocks, and the "can't reference a variable in its own
+initializer" (`var a = a;`) and "no duplicate declaration in the same
+scope" footguns are all handled correctly.
 
-Not yet implemented (in rough build order): local/stack-slot variables
-(currently ALL variables are globals, looked up by name in a hash map —
-real scoping and the performance benefit of stack-slot locals is a
-follow-up increment), `if`/`while`/`for`, functions and closures,
-classes/inheritance, strings/bools/nil as fully-operable values (`nil`
-and variable-name strings exist in `VMValue` now, but string
-concatenation via `+` and boolean literals/logic aren't wired up yet),
-arrays/maps, and a real garbage collector (deferred — likely stays on
-`shared_ptr`/reference counting initially, same as the tree-walker,
-until/unless GC becomes a specific goal of its own).
+Not yet implemented (in rough build order): `if`/`while`/`for` (control
+flow needs jump opcodes, not yet added), functions and closures,
+classes/inheritance, string concatenation via `+` and boolean
+literals/logic, arrays/maps, and a real garbage collector (deferred —
+likely stays on `shared_ptr`/reference counting initially, same as the
+tree-walker, until/unless GC becomes a specific goal of its own).
 
 ## Architecture
 
@@ -49,11 +50,12 @@ until/unless GC becomes a specific goal of its own).
 - **`vm_value.h`** — the VM's own value type, deliberately SEPARATE from
   the tree-walker's `Value` (`src/interpreter/value.h`). Currently a
   small `std::variant<monostate, double, string>` (nil / number /
-  string — the string alternative currently exists to hold variable
-  *names* as constants, not yet general string values); will grow
-  further as more types are added, rather than adopting the
-  tree-walker's `Value` wholesale (which would drag in
-  `Callable`/`LoxInstance`/etc. before the VM has any use for them).
+  string — strings now back both variable-name constants AND real
+  string literals, e.g. `print "hello";`, though `+`-concatenation on
+  them isn't wired up yet); will grow further as more types are added,
+  rather than adopting the tree-walker's `Value` wholesale (which would
+  drag in `Callable`/`LoxInstance`/etc. before the VM has any use for
+  them).
 - **`chunk.h`/`.cpp`** — one compiled unit: a flat byte array (`code`), a
   constant pool (`constants`), and a parallel line-number array
   (`lines`) for error reporting.
@@ -111,6 +113,32 @@ by copying the string (`std::string name = asVMString(readConstant());`)
 instead of binding a reference to it. Worth remembering as a general
 pattern: never bind a `const&` to the result of a function that returns
 a reference into a temporary you don't otherwise keep alive.
+
+## Design note: how local variables are resolved (compile-time stack slots)
+
+A local variable's "address" is simply its position in the `Compiler`'s
+`locals` vector at compile time — which is engineered to always mirror
+exactly what's sitting on the VM's runtime value stack at that point in
+execution. So `OP_GET_LOCAL <slot>` / `OP_SET_LOCAL <slot>` are just a
+direct array index (`stack[slot]`) at runtime — no name, no hash-map
+lookup, unlike globals. This is the actual performance payoff of
+"proper" local variables in a bytecode VM, and it's why the compiler
+needs to track scope depth and a locals list at all: getting this
+compile-time bookkeeping right is what makes the runtime access trivial.
+
+Two subtle correctness cases handled deliberately:
+- **`var a = a;`** — `declareVariable()` records the local with a
+  sentinel depth of `-1` ("declared but not yet initialized") before
+  its initializer expression is compiled. If that initializer tries to
+  reference the same name, `resolveLocal()` sees the sentinel and
+  reports a compile error, rather than silently reading whatever
+  garbage happens to be in that stack slot.
+- **Shadowing vs. duplicate declaration** — redeclaring the same name
+  in the exact same block is a compile error (`declareVariable()` scans
+  backward through `locals` but only within the current scope depth);
+  redeclaring it in a *nested, deeper* block is normal shadowing and
+  is allowed, matching how the tree-walker's `Environment` chaining
+  already behaves.
 
 ## How to run it
 
