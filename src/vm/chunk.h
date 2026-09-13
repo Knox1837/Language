@@ -20,4 +20,7 @@ public:
 
     // Adds a value to the constant pool and returns its index (used as OP_CONSTANT's operand byte).
     int addConstant(VMValue value);
+
+    // Overwrites the 2-byte jump offset already written at `code[offset]` and `code[offset+1]` — used for backpatching: a jump's destination often isn't known until AFTER its body has been compiled
+    void patchJumpAt(size_t offset, uint16_t jumpDistance);
 };

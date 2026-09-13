@@ -19,3 +19,9 @@ int Chunk::addConstant(VMValue value) {
     constants.push_back(value);
     return static_cast<int>(constants.size() - 1);
 }
+
+void Chunk::patchJumpAt(size_t offset, uint16_t jumpDistance) {
+    // Big-endian 2-byte write: matches how the VM reads it back (see VM::run()'s OP_JUMP/OP_JUMP_IF_FALSE/OP_LOOP cases).
+    code[offset] = static_cast<uint8_t>((jumpDistance >> 8) & 0xFF);
+    code[offset + 1] = static_cast<uint8_t>(jumpDistance & 0xFF);
+}
