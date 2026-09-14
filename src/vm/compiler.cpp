@@ -38,6 +38,7 @@ void Compiler::varDeclaration() {
     consume(TokenType::IDENTIFIER, "Expect variable name.");
     Token nameToken = previous();
 
+    // For a LOCAL, declareVariable() records it in `locals` right away (before the initializer is compiled) 
     declareVariable(nameToken);
     uint8_t globalConstant = (scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
@@ -65,6 +66,8 @@ void Compiler::declareVariable(const Token& name) {
             return;
         }
     }
+
+    // depth is set to -1 ("not yet initialized") rather than scopeDepth immediately
     locals.push_back(LocalVar{name, -1});
 }
 
@@ -110,6 +113,12 @@ void Compiler::endScope() {
 void Compiler::statement() {
     if (match(TokenType::PRINT)) {
         printStatement();
+    } else if (match(TokenType::IF)) {
+        ifStatement();
+    } else if (match(TokenType::WHILE)) {
+        whileStatement();
+    } else if (match(TokenType::FOR)) {
+        forStatement();
     } else if (match(TokenType::LEFT_BRACE)) {
         beginScope();
         block();
@@ -124,6 +133,100 @@ void Compiler::block() {
         declaration();
     }
     consume(TokenType::RIGHT_BRACE, "Expect '}' after block.");
+}
+
+void Compiler::ifStatement() {
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'if'.");
+    expression(); // condition; leaves its value on the stack
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after if condition.");
+
+    // Placeholder jump: if the condition is falsey, skip the then-branch entirely.
+    size_t thenJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitByte(OpCode::OP_POP); // discard the (truthy) condition value before running the then-branch
+    statement();
+
+    // Unconditional jump at the END of the then-branch, to skip past the else-branch entirely
+    size_t elseJump = emitJump(OpCode::OP_JUMP);
+
+    patchJump(thenJump); // NOW we know how far to jump if the condition was false, right here
+    emitByte(OpCode::OP_POP); // discard the (falsey) condition value before running the else-branch
+
+    if (match(TokenType::ELSE)) {
+        statement();
+    }
+    patchJump(elseJump);
+}
+
+void Compiler::whileStatement() {
+    size_t loopStart = chunkOut->code.size(); // remember where the condition check begins, to jump back to it
+
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'while'.");
+    expression();
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after while condition.");
+
+    size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitByte(OpCode::OP_POP); // discard the (truthy) condition before running the body
+    statement();
+    emitLoop(loopStart); // jump BACK to re-check the condition
+
+    patchJump(exitJump);
+    emitByte(OpCode::OP_POP); // discard the (falsey) condition that caused the loop to exit
+}
+
+void Compiler::forStatement() {
+    // "for (init; cond; incr) body" — compiled directly to the equivalent jump/loop bytecode
+    beginScope(); // so a "var i" in the init-clause is scoped to the loop, matching the tree-walker
+
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
+
+    if (match(TokenType::SEMICOLON)) {
+        // no initializer
+    } else if (match(TokenType::VAR)) {
+        varDeclaration(); // consumes its own trailing ';'
+    } else {
+        expressionStatement(); // consumes its own trailing ';'
+    }
+
+    size_t loopStart = chunkOut->code.size();
+
+    // Condition is optional; if omitted, treat as "always true" (infinite loop, same as the tree-walker's for-loop desugaring).
+    size_t exitJump = static_cast<size_t>(-1);
+    bool hasCondition = !check(TokenType::SEMICOLON);
+    if (hasCondition) {
+        expression();
+        consume(TokenType::SEMICOLON, "Expect ';' after loop condition.");
+        exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+        emitByte(OpCode::OP_POP); // discard the (truthy) condition
+    } else {
+        consume(TokenType::SEMICOLON, "Expect ';' after loop condition.");
+    }
+
+    // The increment clause is parsed HERE (before the body) but must EXECUTE after the body each iteration. 
+    if (!check(TokenType::RIGHT_PAREN)) {
+        size_t bodyJump = emitJump(OpCode::OP_JUMP);
+        size_t incrementStart = chunkOut->code.size();
+
+        expression(); // the increment expression, e.g. "i = i + 1"
+        emitByte(OpCode::OP_POP); // it's a bare expression — discard its unused result
+
+        consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
+
+        emitLoop(loopStart);      // after the increment, jump back to re-check the condition
+        loopStart = incrementStart; // the BODY's end should now loop back to the increment, not the condition
+        patchJump(bodyJump);      // the jump we emitted above lands here — right before the body
+    } else {
+        consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
+    }
+
+    statement(); // the loop body
+    emitLoop(loopStart);
+
+    if (hasCondition) {
+        patchJump(exitJump);
+        emitByte(OpCode::OP_POP); // discard the (falsey) condition that caused the loop to exit
+    }
+
+    endScope();
 }
 
 void Compiler::printStatement() {
@@ -180,6 +283,15 @@ void Compiler::stringLiteral(bool) {
     emitConstant(VMValue{previous().lexeme});
 }
 
+void Compiler::literal(bool) {
+    switch (previous().type) {
+        case TokenType::TRUE:  emitByte(OpCode::OP_TRUE);  break;
+        case TokenType::FALSE: emitByte(OpCode::OP_FALSE); break;
+        case TokenType::NIL:   emitByte(OpCode::OP_NIL);   break;
+        default: break; // unreachable given the parse-rule table below
+    }
+}
+
 void Compiler::grouping(bool) {
     expression();
     consume(TokenType::RIGHT_PAREN, "Expect ')' after expression.");
@@ -190,6 +302,8 @@ void Compiler::unary(bool) {
     parsePrecedence(Precedence::UNARY); // compile the operand
     if (opType == TokenType::MINUS) {
         emitByte(OpCode::OP_NEGATE);
+    } else if (opType == TokenType::BANG) {
+        emitByte(OpCode::OP_NOT);
     }
 }
 
@@ -201,12 +315,37 @@ void Compiler::binary(bool) {
     parsePrecedence(static_cast<Precedence>(static_cast<int>(rule.precedence) + 1));
 
     switch (opType) {
-        case TokenType::PLUS:  emitByte(OpCode::OP_ADD);      break;
-        case TokenType::MINUS: emitByte(OpCode::OP_SUBTRACT); break;
-        case TokenType::STAR:  emitByte(OpCode::OP_MULTIPLY); break;
-        case TokenType::SLASH: emitByte(OpCode::OP_DIVIDE);   break;
+        case TokenType::PLUS:          emitByte(OpCode::OP_ADD);      break;
+        case TokenType::MINUS:         emitByte(OpCode::OP_SUBTRACT); break;
+        case TokenType::STAR:          emitByte(OpCode::OP_MULTIPLY); break;
+        case TokenType::SLASH:         emitByte(OpCode::OP_DIVIDE);   break;
+        case TokenType::EQUAL_EQUAL:   emitByte(OpCode::OP_EQUAL);    break;
+        case TokenType::BANG_EQUAL:    emitByte(OpCode::OP_EQUAL); emitByte(OpCode::OP_NOT); break;
+        case TokenType::GREATER:       emitByte(OpCode::OP_GREATER);  break;
+        case TokenType::GREATER_EQUAL: emitByte(OpCode::OP_LESS); emitByte(OpCode::OP_NOT); break;
+        case TokenType::LESS:          emitByte(OpCode::OP_LESS);     break;
+        case TokenType::LESS_EQUAL:    emitByte(OpCode::OP_GREATER); emitByte(OpCode::OP_NOT); break;
         default: break; // unreachable given the parse-rule table below
     }
+}
+
+void Compiler::and_(bool) {
+    // Short-circuit: if the left operand (already on the stack) is falsey, skip evaluating the right operand entirely and leave the falsey left value as the whole expression's result
+    size_t endJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitByte(OpCode::OP_POP); // left was truthy — discard it, result becomes whatever the right side is
+    parsePrecedence(Precedence::AND);
+    patchJump(endJump);
+}
+
+void Compiler::or_(bool) {
+    // Mirror of and_(): if the left operand is truthy, skip the right operand and keep the left value as the result.
+    // adding a new opcode purely for this.
+    size_t elseJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    size_t endJump = emitJump(OpCode::OP_JUMP);
+    patchJump(elseJump);
+    emitByte(OpCode::OP_POP);
+    parsePrecedence(Precedence::OR);
+    patchJump(endJump);
 }
 
 void Compiler::variable(bool canAssign) {
@@ -247,27 +386,43 @@ uint8_t Compiler::identifierConstant(const Token& name) {
 // every other token type gets {nullptr, nullptr, NONE} via the default-constructed fallback in getRule().
 
 const Compiler::ParseRule& Compiler::getRule(TokenType type) {
-    static const ParseRule numberRule   = { &Compiler::number,   nullptr,          Precedence::NONE };
-    static const ParseRule stringRule   = { &Compiler::stringLiteral, nullptr,     Precedence::NONE };
-    static const ParseRule groupingRule = { &Compiler::grouping, nullptr,          Precedence::NONE };
-    static const ParseRule unaryRule    = { &Compiler::unary,    nullptr,          Precedence::NONE };
-    static const ParseRule termRule     = { nullptr,             &Compiler::binary, Precedence::TERM };
-    static const ParseRule factorRule   = { nullptr,             &Compiler::binary, Precedence::FACTOR };
-    static const ParseRule minusRule    = { &Compiler::unary,    &Compiler::binary, Precedence::TERM }; // '-' is BOTH unary and binary
-    static const ParseRule variableRule = { &Compiler::variable, nullptr,          Precedence::NONE };
-    static const ParseRule noRule       = { nullptr,             nullptr,          Precedence::NONE };
+    static const ParseRule numberRule     = { &Compiler::number,       nullptr,           Precedence::NONE };
+    static const ParseRule stringRule     = { &Compiler::stringLiteral, nullptr,          Precedence::NONE };
+    static const ParseRule literalRule    = { &Compiler::literal,      nullptr,           Precedence::NONE };
+    static const ParseRule groupingRule   = { &Compiler::grouping,     nullptr,           Precedence::NONE };
+    static const ParseRule termRule       = { nullptr,                 &Compiler::binary, Precedence::TERM };
+    static const ParseRule factorRule     = { nullptr,                 &Compiler::binary, Precedence::FACTOR };
+    static const ParseRule minusRule      = { &Compiler::unary,        &Compiler::binary, Precedence::TERM }; // '-' is BOTH unary and binary
+    static const ParseRule bangRule       = { &Compiler::unary,        nullptr,           Precedence::NONE }; // '!' is unary-only
+    static const ParseRule equalityRule   = { nullptr,                 &Compiler::binary, Precedence::EQUALITY };
+    static const ParseRule comparisonRule = { nullptr,                 &Compiler::binary, Precedence::COMPARISON };
+    static const ParseRule andRule        = { nullptr,                 &Compiler::and_,   Precedence::AND };
+    static const ParseRule orRule         = { nullptr,                 &Compiler::or_,    Precedence::OR };
+    static const ParseRule variableRule   = { &Compiler::variable,     nullptr,           Precedence::NONE };
+    static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
     switch (type) {
-        case TokenType::NUMBER:      return numberRule;
-        case TokenType::STRING:      return stringRule;
-        case TokenType::IDENTIFIER:  return variableRule;
-        case TokenType::LEFT_PAREN:  return groupingRule;
-        case TokenType::MINUS:       return minusRule;
-        case TokenType::PLUS:        return termRule;
+        case TokenType::NUMBER:         return numberRule;
+        case TokenType::STRING:         return stringRule;
+        case TokenType::TRUE:
+        case TokenType::FALSE:
+        case TokenType::NIL:            return literalRule;
+        case TokenType::IDENTIFIER:     return variableRule;
+        case TokenType::LEFT_PAREN:     return groupingRule;
+        case TokenType::MINUS:          return minusRule;
+        case TokenType::PLUS:           return termRule;
         case TokenType::SLASH:
-        case TokenType::STAR:        return factorRule;
-        case TokenType::BANG:        return unaryRule; // reserved for later (logical not) — harmless to wire now
-        default:                     return noRule;
+        case TokenType::STAR:           return factorRule;
+        case TokenType::BANG:           return bangRule;
+        case TokenType::BANG_EQUAL:
+        case TokenType::EQUAL_EQUAL:    return equalityRule;
+        case TokenType::GREATER:
+        case TokenType::GREATER_EQUAL:
+        case TokenType::LESS:
+        case TokenType::LESS_EQUAL:     return comparisonRule;
+        case TokenType::AND:            return andRule;
+        case TokenType::OR:             return orRule;
+        default:                        return noRule;
     }
 }
 
@@ -332,4 +487,33 @@ void Compiler::emitConstant(VMValue value) {
     int index = chunkOut->addConstant(value);
     emitByte(OpCode::OP_CONSTANT);
     emitByte(static_cast<uint8_t>(index));
+}
+
+size_t Compiler::emitJump(OpCode jumpOp) {
+    emitByte(jumpOp);
+    emitByte(0xFF); // placeholder high byte
+    emitByte(0xFF); // placeholder low byte
+    return chunkOut->code.size() - 2; // position of the placeholder itself
+}
+
+void Compiler::patchJump(size_t jumpPlaceholderOffset) {
+    // Distance from right after the 2-byte operand to the current (i.e. "jump to here") position.
+    size_t distance = chunkOut->code.size() - jumpPlaceholderOffset - 2;
+    if (distance > 0xFFFF) {
+        errorAt(previous(), "Too much code to jump over (limit 65535 bytes for this increment).");
+        return;
+    }
+    chunkOut->patchJumpAt(jumpPlaceholderOffset, static_cast<uint16_t>(distance));
+}
+
+void Compiler::emitLoop(size_t loopStartOffset) {
+    emitByte(OpCode::OP_LOOP); 
+    // +2: account for OP_LOOP's own 2-byte operand, which sits between "now" and the jump landing there, otherwise the jump would land 2 bytes short of loopStartOffset.
+    size_t distance = chunkOut->code.size() - loopStartOffset + 2;
+    if (distance > 0xFFFF) {
+        errorAt(previous(), "Loop body too large to jump over (limit 65535 bytes for this increment).");
+        return;
+    }
+    emitByte(static_cast<uint8_t>((distance >> 8) & 0xFF));
+    emitByte(static_cast<uint8_t>(distance & 0xFF));
 }

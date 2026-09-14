@@ -28,6 +28,7 @@ private:
     InterpretResult run();
 
     uint8_t readByte();
+    uint16_t readShort(); // reads a 2-byte big-endian operand (jump offsets)
     VMValue readConstant();
 
     void push(VMValue value);
@@ -37,6 +38,9 @@ private:
     // Type-checked arithmetic helper shared by OP_ADD/SUBTRACT/etc.
     // returns false (and reports the error) if either operand isn't a number, so run() can bail out with RUNTIME_ERROR cleanly.
     bool requireNumbers(const VMValue& a, const VMValue& b, const char* opName);
+
+    // Equality across any two VMValues, including different alternative types
+    bool areVMEqual(const VMValue& a, const VMValue& b);
 
     void runtimeError(const std::string& message);
 };

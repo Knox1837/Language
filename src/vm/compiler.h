@@ -31,9 +31,13 @@ private:
     enum class Precedence {
         NONE,
         ASSIGNMENT, // =
+        OR,         // or
+        AND,        // and
+        EQUALITY,   // == !=
+        COMPARISON, // < > <= >=
         TERM,       // + -
         FACTOR,     // * /
-        UNARY,      // -x
+        UNARY,      // -x !x
         PRIMARY
     };
 
@@ -56,10 +60,12 @@ private:
     void block();       // "{" declaration* "}"
     void beginScope();
     void endScope();
+    void ifStatement();
+    void whileStatement();
+    void forStatement();
 
     // Variable-declaration helpers, split out so varDeclaration() can
-    // stay agnostic about whether it's declaring a global or a local —
-    // the split happens here based on scopeDepth.
+    // stay agnostic about whether it's declaring a global or a local. the split happens here based on scopeDepth.
     void declareVariable(const Token& name);       // records a LOCAL in `locals` (no-op at global scope)
     void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or nothing for a local
                                                      // (a local's "definition" is just it staying on the stack)
@@ -69,10 +75,13 @@ private:
     // just consumed (`previous()`), and emits bytecode for it.
     void number(bool canAssign);
     void stringLiteral(bool canAssign);
+    void literal(bool canAssign);    // true / false / nil
     void grouping(bool canAssign);
     void unary(bool canAssign);
     void binary(bool canAssign);
     void variable(bool canAssign);
+    void and_(bool canAssign);
+    void or_(bool canAssign);
 
     // Reads a variable name from `name`, adds it to the constant pool as a string, and returns its constant index
     uint8_t identifierConstant(const Token& name);
@@ -92,4 +101,13 @@ private:
     void emitByte(OpCode op);
     void emitConstant(VMValue value);
     int currentLine() const;
+
+    // Emits a jump instruction with a 2-byte PLACEHOLDER offset, and returns the byte position of that placeholder so it can be fixed up later via patchJump() once the real distance is known.
+    size_t emitJump(OpCode jumpOp);
+
+    // Backpatches the jump at `jumpPlaceholderOffset` to land at the CURRENT position in the bytecode (i.e. "jump to right here").
+    void patchJump(size_t jumpPlaceholderOffset);
+
+    // Emits OP_LOOP with the (already known, since it's backward) distance back to `loopStartOffset`.
+    void emitLoop(size_t loopStartOffset);
 };

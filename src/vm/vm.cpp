@@ -20,6 +20,12 @@ uint8_t VM::readByte() {
     return chunk.code[ip++];
 }
 
+uint16_t VM::readShort() {
+    uint8_t high = readByte();
+    uint8_t low = readByte();
+    return (static_cast<uint16_t>(high) << 8) | low;
+}
+
 VMValue VM::readConstant() {
     return chunk.constants[readByte()];
 }
@@ -44,6 +50,10 @@ bool VM::requireNumbers(const VMValue& a, const VMValue& b, const char* opName) 
     msg << "Operands to '" << opName << "' must be numbers.";
     runtimeError(msg.str());
     return false;
+}
+
+bool VM::areVMEqual(const VMValue& a, const VMValue& b) {
+    return a == b; // std::variant's operator== already returns false for differing alternatives rather than throwing, exactly the semantics the tree-walker's isEqual() wants
 }
 
 void VM::runtimeError(const std::string& message) {
@@ -108,6 +118,8 @@ InterpretResult VM::run() {
                     std::cout << asVMNumber(value) << "\n";
                 } else if (isVMString(value)) {
                     std::cout << asVMString(value) << "\n";
+                } else if (isVMBool(value)) {
+                    std::cout << (asVMBool(value) ? "true" : "false") << "\n";
                 } else {
                     std::cout << "nil\n";
                 }
@@ -152,6 +164,61 @@ InterpretResult VM::run() {
                 uint8_t slot = readByte();
                 // Same "peek, don't pop" reasoning as OP_SET_GLOBAL- assignment is an expression, so its value stays on top of the stack for whatever comes next.
                 stack[slot] = peekStack(0);
+                break;
+            }
+            case OpCode::OP_TRUE: {
+                push(true);
+                break;
+            }
+            case OpCode::OP_FALSE: {
+                push(false);
+                break;
+            }
+            case OpCode::OP_NIL: {
+                push(std::monostate{});
+                break;
+            }
+            case OpCode::OP_NOT: {
+                // Always yields a real bool, regardless of the operand's actual type: matches the tree-walker's Unary BANG case (result = !isTruthy(right)).
+                push(!isVMTruthy(pop()));
+                break;
+            }
+            case OpCode::OP_EQUAL: {
+                VMValue b = pop();
+                VMValue a = pop();
+                push(areVMEqual(a, b));
+                break;
+            }
+            case OpCode::OP_GREATER: {
+                VMValue b = pop();
+                VMValue a = pop();
+                if (!requireNumbers(a, b, ">")) return InterpretResult::RUNTIME_ERROR;
+                push(asVMNumber(a) > asVMNumber(b));
+                break;
+            }
+            case OpCode::OP_LESS: {
+                VMValue b = pop();
+                VMValue a = pop();
+                if (!requireNumbers(a, b, "<")) return InterpretResult::RUNTIME_ERROR;
+                push(asVMNumber(a) < asVMNumber(b));
+                break;
+            }
+            case OpCode::OP_JUMP: {
+                uint16_t offset = readShort();
+                ip += offset;
+                break;
+            }
+            case OpCode::OP_JUMP_IF_FALSE: {
+                uint16_t offset = readShort();
+                // PEEKS, does not pop, matches the tree-walker's short-circuiting if/while/and/or semantics, where the condition is explicitly popped afterward (or left on the stack as the short-circuit result).
+                if (!isVMTruthy(peekStack(0))) {
+                    ip += offset;
+                }
+                break;
+            }
+            case OpCode::OP_LOOP: {
+                uint16_t offset = readShort();
+                ip -= offset;
                 break;
             }
             case OpCode::OP_RETURN: {
