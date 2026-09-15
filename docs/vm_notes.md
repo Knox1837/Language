@@ -25,20 +25,18 @@ statement). This is how CPython, Lua, and the JVM all work internally.
 
 ## Current status
 
-Implemented: number literals, string literals, unary `-`, binary
-`+ - * /` with correct precedence and left-associativity, parenthesized
-grouping, `print`, global variables, **block statements (`{ ... }`) and
-local variables with real lexical scoping** — locals are resolved to a
-fixed stack-slot index at COMPILE time (a single array access at
-runtime), not looked up by name like globals still are. Shadowing,
-nested blocks, and the "can't reference a variable in its own
-initializer" (`var a = a;`) and "no duplicate declaration in the same
-scope" footguns are all handled correctly.
+Implemented: number/string/boolean/nil literals, unary `-`/`!`, binary
+`+ - * /` with correct precedence and left-associativity, comparisons
+(`== != > >= < <=`), logical `and`/`or` (short-circuiting, returning an
+actual operand value like the tree-walker — not necessarily a bool),
+parenthesized grouping, `print`, global and local variables with real
+lexical scoping, and now **control flow**: `if`/`else`, `while`, and
+`for` (including omitted initializer/condition/increment clauses, and a
+for-loop's own variable correctly scoped to the loop only).
 
-Not yet implemented (in rough build order): `if`/`while`/`for` (control
-flow needs jump opcodes, not yet added), functions and closures,
-classes/inheritance, string concatenation via `+` and boolean
-literals/logic, arrays/maps, and a real garbage collector (deferred —
+Not yet implemented (in rough build order): functions and closures,
+classes/inheritance, string concatenation via `+` (currently number-only
+in the VM), arrays/maps, and a real garbage collector (deferred —
 likely stays on `shared_ptr`/reference counting initially, same as the
 tree-walker, until/unless GC becomes a specific goal of its own).
 
@@ -139,6 +137,39 @@ Two subtle correctness cases handled deliberately:
   redeclaring it in a *nested, deeper* block is normal shadowing and
   is allowed, matching how the tree-walker's `Environment` chaining
   already behaves.
+
+## Design note: how jumps and backpatching work
+
+Unlike everything compiled before this increment (which just emits bytes
+in a straight line as parsing proceeds), a jump's DESTINATION often
+isn't known until after its body has been compiled — e.g. an `if`
+doesn't know how many bytes its then-branch will occupy until that
+branch has actually been emitted. The standard fix (`emitJump`/
+`patchJump` in `compiler.cpp`): emit the jump opcode with a 2-byte
+PLACEHOLDER offset, remember that byte position, keep compiling, then
+go back and overwrite the placeholder with the real, now-known distance
+(`Chunk::patchJumpAt`). Backward jumps (`OP_LOOP`, used to return to a
+loop's condition) don't need this trick — the loop's start position is
+already known by the time the jump is emitted, so the distance is
+computed immediately.
+
+## Bug caught during testing: OP_JUMP_IF_FALSE peek vs. pop
+
+The first version of `OP_JUMP_IF_FALSE` popped the condition value
+unconditionally before deciding whether to jump. This is wrong: `if`
+and `while` both already emit their OWN explicit `OP_POP` for the
+condition (once for the then-branch, once for the else-branch) —
+if `OP_JUMP_IF_FALSE` also popped, that's a double-pop, silently
+corrupting the stack. Worse, `and`/`or`'s short-circuit behavior
+specifically depends on the falsey/truthy operand SURVIVING on the
+stack as the expression's result when short-circuiting — popping it
+inside the jump instruction would throw that value away instead of
+returning it. Fixed by making `OP_JUMP_IF_FALSE` only PEEK the
+condition; every caller (`if`, `while`, `for`, `and_`, `or_`) is
+responsible for popping it explicitly wherever that's actually correct
+for that construct — caught during code review before ever running it,
+by tracing through what `if`/`and_`/`or_` each assumed about the
+opcode's contract.
 
 ## How to run it
 
