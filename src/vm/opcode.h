@@ -30,6 +30,11 @@ enum class OpCode : uint8_t {
                         // Peeking (not popping) is deliberate: if/while explicitly OP_POP the
                         // condition themselves afterward, and and_/or_ rely on the value
                         // surviving on the stack as their short-circuit result.
-    OP_LOOP,           // unconditional BACKWARD jump: ip -= operand (used to jump back to a loop's condition)
-    OP_RETURN,         // stop execution (temporary — real semantics come with functions)
+    OP_LOOP,            // unconditional BACKWARD jump: ip -= operand (used to jump back to a loop's condition)
+    OP_CALL,            // call the callable value sitting `operand` slots below the top of the stack
+                        // (i.e. below its `operand` arguments, which sit above it) — pushes a new
+                        // CallFrame and transfers execution into the function's own bytecode
+    OP_RETURN,          // pop the return value, pop the current CallFrame, resume the caller with
+                        // that return value pushed onto ITS stack. At the top level (no caller),
+                        // this now means "the whole program is done" as before.
 };
