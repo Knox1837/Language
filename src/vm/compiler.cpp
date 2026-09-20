@@ -7,31 +7,98 @@
 #include <iostream>
 #include <cstdlib>
 
-bool Compiler::compile(const std::string& source, Chunk& chunk) {
+std::shared_ptr<VMFunction> Compiler::compile(const std::string& source) {
     Lexer lexer(source);
     tokens = lexer.scanTokens();
     current = 0;
-    chunkOut = &chunk;
     hadError = false;
-    locals.clear();
-    scopeDepth = 0;
+    functionStack.clear();
+
+    // The top-level script is treated as a function too (name "<script>", arity 0) 
+    // This is what lets the VM push it onto the same call-frame stack as any real function, uniformly, rather than needing separate "top-level vs. inside a call" execution code.
+    auto scriptFunction = std::make_shared<VMFunction>();
+    scriptFunction->name = "<script>";
+    scriptFunction->arity = 0;
+    functionStack.push_back(FunctionState{scriptFunction, {}, 0});
+
+    functionStack.back().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, "", 0), 0});
 
     while (!isAtEnd()) {
         declaration();
     }
 
+    emitByte(OpCode::OP_NIL); // implicit "return nil;" if the script/function falls off the end
     emitByte(OpCode::OP_RETURN);
-    return !hadError;
+
+    return hadError ? nullptr : scriptFunction;
 }
 
 // declarations & statements
 
 void Compiler::declaration() {
-    if (match(TokenType::VAR)) {
+    if (match(TokenType::DEF)) {
+        functionDeclaration();
+    } else if (match(TokenType::VAR)) {
         varDeclaration();
     } else {
         statement();
     }
+}
+
+void Compiler::functionDeclaration() {
+    consume(TokenType::IDENTIFIER, "Expect function name.");
+    Token nameToken = previous();
+
+    // Declared and immediately marked initialized BEFORE compiling the body 
+    // this is what lets the function reference its own name recursively inside its own body.
+    declareVariable(nameToken);
+    if (current_().scopeDepth > 0) {
+        markInitialized();
+    }
+    uint8_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
+
+    functionBody(nameToken.lexeme);
+
+    defineVariable(globalConstant);
+}
+
+void Compiler::functionBody(const std::string& name) {
+    auto function = std::make_shared<VMFunction>();
+    function->name = name;
+    functionStack.push_back(FunctionState{function, {}, 0});
+
+    // Same slot-0 reservation as the top-level script
+    functionStack.back().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, "", 0), 0});
+
+    beginScope();
+
+    consume(TokenType::LEFT_PAREN, "Expect '(' after function name.");
+    if (!check(TokenType::RIGHT_PAREN)) {
+        do {
+            function->arity++;
+            if (function->arity > 255) {
+                errorAt(peek(), "Can't have more than 255 parameters.");
+            }
+            consume(TokenType::IDENTIFIER, "Expect parameter name.");
+            Token paramName = previous();
+            declareVariable(paramName);
+            markInitialized(); // a parameter's value is already sitting in its stack slot by the time the body runs
+        } while (match(TokenType::COMMA));
+    }
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
+
+    consume(TokenType::LEFT_BRACE, "Expect '{' before function body.");
+    block();
+
+    emitByte(OpCode::OP_NIL); // implicit "return nil;" if the body falls off the end without an explicit return
+    emitByte(OpCode::OP_RETURN);
+
+    // No endScope() call here
+    functionStack.pop_back();
+
+    // Emit the finished function as a CONSTANT in the ENCLOSING function's chunk. 
+    // this is what "returns" the compiled function value back out to whatever's compiling the declaration itself (functionDeclaration() above, which then defines a variable for it).
+    emitConstant(VMValue{function});
 }
 
 void Compiler::varDeclaration() {
@@ -40,7 +107,7 @@ void Compiler::varDeclaration() {
 
     // For a LOCAL, declareVariable() records it in `locals` right away (before the initializer is compiled) 
     declareVariable(nameToken);
-    uint8_t globalConstant = (scopeDepth == 0) ? identifierConstant(nameToken) : 0;
+    uint8_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
     if (match(TokenType::EQUAL)) {
         expression();
@@ -55,12 +122,14 @@ void Compiler::varDeclaration() {
 }
 
 void Compiler::declareVariable(const Token& name) {
-    if (scopeDepth == 0) return; // globals aren't tracked in `locals` at all
+    if (current_().scopeDepth == 0) return; // globals aren't tracked in `locals` at all
+
+    auto& locals = current_().locals;
 
     // Disallow redeclaring the same name twice in the SAME block
     // e.g. "{ var a = 1; var a = 2; }"  
     for (int i = static_cast<int>(locals.size()) - 1; i >= 0; i--) {
-        if (locals[i].depth != -1 && locals[i].depth < scopeDepth) break;
+        if (locals[i].depth != -1 && locals[i].depth < current_().scopeDepth) break;
         if (locals[i].name.lexeme == name.lexeme) {
             errorAt(name, "A variable with this name already exists in this scope.");
             return;
@@ -71,40 +140,46 @@ void Compiler::declareVariable(const Token& name) {
     locals.push_back(LocalVar{name, -1});
 }
 
+void Compiler::markInitialized() {
+    if (current_().scopeDepth == 0) return; // no-op for globals — nothing to mark
+    current_().locals.back().depth = current_().scopeDepth;
+}
+
 void Compiler::defineVariable(uint8_t globalConstant) {
-    if (scopeDepth > 0) {
-        // A local doesn't need a runtime "define" instruction at all.
-        // its value is already sitting on the stack exactly where it needs to be 
-        locals.back().depth = scopeDepth;
+    if (current_().scopeDepth > 0) {
+        markInitialized();
         return;
     }
     emitByte(OpCode::OP_DEFINE_GLOBAL);
     emitByte(globalConstant);
 }
 
-int Compiler::resolveLocal(const Token& name) {
+int Compiler::resolveLocal(FunctionState& state, const Token& name) {
     // Search backward (innermost/most-recently-declared first) so shadowing resolves to the closest enclosing declaration.
-    for (int i = static_cast<int>(locals.size()) - 1; i >= 0; i--) {
-        if (locals[i].name.lexeme == name.lexeme) {
-            if (locals[i].depth == -1) {
+    for (int i = static_cast<int>(state.locals.size()) - 1; i >= 0; i--) {
+        if (state.locals[i].name.lexeme == name.lexeme) {
+            if (state.locals[i].depth == -1) {
+                // Found the name, but it's this same declaration, still mid-initializer (see declareVariable()'s sentinel)
                 errorAt(name, "Cannot read a local variable in its own initializer.");
                 return -1;
             }
             return i; // this local's slot IS its index in `locals`,
-                      // which mirrors its actual position on the VM stack
+                      // relative to this function's OWN call frame
         }
     }
     return -1; // not a local — caller falls back to treating it as a global
 }
 
 void Compiler::beginScope() {
-    scopeDepth++;
+    current_().scopeDepth++;
 }
 
 void Compiler::endScope() {
-    scopeDepth--;
-    // Pop every local that belonged to the block just exited.
-    while (!locals.empty() && locals.back().depth > scopeDepth) {
+    current_().scopeDepth--;
+    auto& locals = current_().locals;
+    // Pop every local that belonged to the block just exited. 
+    // Emitted as individual OP_POP instructions (one per local) rather than a single "pop N" instruction
+    while (!locals.empty() && locals.back().depth > current_().scopeDepth) {
         emitByte(OpCode::OP_POP);
         locals.pop_back();
     }
@@ -113,6 +188,8 @@ void Compiler::endScope() {
 void Compiler::statement() {
     if (match(TokenType::PRINT)) {
         printStatement();
+    } else if (match(TokenType::RETURN)) {
+        returnStatement();
     } else if (match(TokenType::IF)) {
         ifStatement();
     } else if (match(TokenType::WHILE)) {
@@ -135,6 +212,24 @@ void Compiler::block() {
     consume(TokenType::RIGHT_BRACE, "Expect '}' after block.");
 }
 
+void Compiler::printStatement() {
+    expression();
+    consume(TokenType::SEMICOLON, "Expect ';' after value.");
+    emitByte(OpCode::OP_PRINT);
+}
+
+void Compiler::returnStatement() {
+    if (match(TokenType::SEMICOLON)) {
+        // Bare "return;" -> nil, matching the tree-walker's ReturnStmt
+        // with no value expression.
+        emitByte(OpCode::OP_NIL);
+    } else {
+        expression();
+        consume(TokenType::SEMICOLON, "Expect ';' after return value.");
+    }
+    emitByte(OpCode::OP_RETURN);
+}
+
 void Compiler::ifStatement() {
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'if'.");
     expression(); // condition; leaves its value on the stack
@@ -148,7 +243,7 @@ void Compiler::ifStatement() {
     // Unconditional jump at the END of the then-branch, to skip past the else-branch entirely
     size_t elseJump = emitJump(OpCode::OP_JUMP);
 
-    patchJump(thenJump); // NOW we know how far to jump if the condition was false, right here
+    patchJump(thenJump); // NOW we know how far to jump if the condition was false — right here
     emitByte(OpCode::OP_POP); // discard the (falsey) condition value before running the else-branch
 
     if (match(TokenType::ELSE)) {
@@ -158,7 +253,7 @@ void Compiler::ifStatement() {
 }
 
 void Compiler::whileStatement() {
-    size_t loopStart = chunkOut->code.size(); // remember where the condition check begins, to jump back to it
+    size_t loopStart = currentChunk().code.size(); // remember where the condition check begins, to jump back to it
 
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'while'.");
     expression();
@@ -187,7 +282,7 @@ void Compiler::forStatement() {
         expressionStatement(); // consumes its own trailing ';'
     }
 
-    size_t loopStart = chunkOut->code.size();
+    size_t loopStart = currentChunk().code.size();
 
     // Condition is optional; if omitted, treat as "always true" (infinite loop, same as the tree-walker's for-loop desugaring).
     size_t exitJump = static_cast<size_t>(-1);
@@ -204,7 +299,7 @@ void Compiler::forStatement() {
     // The increment clause is parsed HERE (before the body) but must EXECUTE after the body each iteration. 
     if (!check(TokenType::RIGHT_PAREN)) {
         size_t bodyJump = emitJump(OpCode::OP_JUMP);
-        size_t incrementStart = chunkOut->code.size();
+        size_t incrementStart = currentChunk().code.size();
 
         expression(); // the increment expression, e.g. "i = i + 1"
         emitByte(OpCode::OP_POP); // it's a bare expression — discard its unused result
@@ -227,12 +322,6 @@ void Compiler::forStatement() {
     }
 
     endScope();
-}
-
-void Compiler::printStatement() {
-    expression();
-    consume(TokenType::SEMICOLON, "Expect ';' after value.");
-    emitByte(OpCode::OP_PRINT);
 }
 
 void Compiler::expressionStatement() {
@@ -350,7 +439,7 @@ void Compiler::or_(bool) {
 
 void Compiler::variable(bool canAssign) {
     Token name = previous();
-    int localSlot = resolveLocal(name);
+    int localSlot = resolveLocal(current_(), name);
 
     OpCode getOp, setOp;
     uint8_t operand;
@@ -374,22 +463,40 @@ void Compiler::variable(bool canAssign) {
     }
 }
 
+void Compiler::call(bool) {
+    uint8_t argCount = argumentList();
+    emitByte(OpCode::OP_CALL);
+    emitByte(argCount);
+}
+
+uint8_t Compiler::argumentList() {
+    uint8_t count = 0;
+    if (!check(TokenType::RIGHT_PAREN)) {
+        do {
+            expression();
+            if (count == 255) {
+                errorAt(previous(), "Can't have more than 255 arguments.");
+            }
+            count++;
+        } while (match(TokenType::COMMA));
+    }
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after arguments.");
+    return count;
+}
+
 uint8_t Compiler::identifierConstant(const Token& name) {
     // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a
     // number literal is stored as a VMValue double.
-    int index = chunkOut->addConstant(VMValue{name.lexeme});
+    int index = currentChunk().addConstant(VMValue{name.lexeme});
     return static_cast<uint8_t>(index);
 }
 
 // parse rule table
-// One entry per TokenType this increment cares about; 
-// every other token type gets {nullptr, nullptr, NONE} via the default-constructed fallback in getRule().
 
 const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule numberRule     = { &Compiler::number,       nullptr,           Precedence::NONE };
     static const ParseRule stringRule     = { &Compiler::stringLiteral, nullptr,          Precedence::NONE };
     static const ParseRule literalRule    = { &Compiler::literal,      nullptr,           Precedence::NONE };
-    static const ParseRule groupingRule   = { &Compiler::grouping,     nullptr,           Precedence::NONE };
     static const ParseRule termRule       = { nullptr,                 &Compiler::binary, Precedence::TERM };
     static const ParseRule factorRule     = { nullptr,                 &Compiler::binary, Precedence::FACTOR };
     static const ParseRule minusRule      = { &Compiler::unary,        &Compiler::binary, Precedence::TERM }; // '-' is BOTH unary and binary
@@ -399,6 +506,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule andRule        = { nullptr,                 &Compiler::and_,   Precedence::AND };
     static const ParseRule orRule         = { nullptr,                 &Compiler::or_,    Precedence::OR };
     static const ParseRule variableRule   = { &Compiler::variable,     nullptr,           Precedence::NONE };
+    static const ParseRule parenRule      = { &Compiler::grouping,     &Compiler::call,   Precedence::CALL };
     static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
     switch (type) {
@@ -408,7 +516,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::FALSE:
         case TokenType::NIL:            return literalRule;
         case TokenType::IDENTIFIER:     return variableRule;
-        case TokenType::LEFT_PAREN:     return groupingRule;
+        case TokenType::LEFT_PAREN:     return parenRule;
         case TokenType::MINUS:          return minusRule;
         case TokenType::PLUS:           return termRule;
         case TokenType::SLASH:
@@ -476,15 +584,15 @@ int Compiler::currentLine() const {
 }
 
 void Compiler::emitByte(uint8_t byte) {
-    chunkOut->write(byte, currentLine());
+    currentChunk().write(byte, currentLine());
 }
 
 void Compiler::emitByte(OpCode op) {
-    chunkOut->write(op, currentLine());
+    currentChunk().write(op, currentLine());
 }
 
 void Compiler::emitConstant(VMValue value) {
-    int index = chunkOut->addConstant(value);
+    int index = currentChunk().addConstant(value);
     emitByte(OpCode::OP_CONSTANT);
     emitByte(static_cast<uint8_t>(index));
 }
@@ -493,23 +601,24 @@ size_t Compiler::emitJump(OpCode jumpOp) {
     emitByte(jumpOp);
     emitByte(0xFF); // placeholder high byte
     emitByte(0xFF); // placeholder low byte
-    return chunkOut->code.size() - 2; // position of the placeholder itself
+    return currentChunk().code.size() - 2; // position of the placeholder itself
 }
 
 void Compiler::patchJump(size_t jumpPlaceholderOffset) {
     // Distance from right after the 2-byte operand to the current (i.e. "jump to here") position.
-    size_t distance = chunkOut->code.size() - jumpPlaceholderOffset - 2;
+    size_t distance = currentChunk().code.size() - jumpPlaceholderOffset - 2;
     if (distance > 0xFFFF) {
         errorAt(previous(), "Too much code to jump over (limit 65535 bytes for this increment).");
         return;
     }
-    chunkOut->patchJumpAt(jumpPlaceholderOffset, static_cast<uint16_t>(distance));
+    currentChunk().patchJumpAt(jumpPlaceholderOffset, static_cast<uint16_t>(distance));
 }
 
 void Compiler::emitLoop(size_t loopStartOffset) {
-    emitByte(OpCode::OP_LOOP); 
-    // +2: account for OP_LOOP's own 2-byte operand, which sits between "now" and the jump landing there, otherwise the jump would land 2 bytes short of loopStartOffset.
-    size_t distance = chunkOut->code.size() - loopStartOffset + 2;
+    emitByte(OpCode::OP_LOOP);
+    // +2: account for OP_LOOP's own 2-byte operand, which sits between "now" and the jump landing there 
+    // otherwise the jump would land 2 bytes short of loopStartOffset.
+    size_t distance = currentChunk().code.size() - loopStartOffset + 2;
     if (distance > 0xFFFF) {
         errorAt(previous(), "Loop body too large to jump over (limit 65535 bytes for this increment).");
         return;

@@ -2,8 +2,10 @@
 #pragma once
 #include <vector>
 #include <string>
+#include <memory>
 #include "../lexer/token.h"
 #include "chunk.h"
+#include "vm_function.h"
 
 // One tracked local variable: its name (for resolving references to it) and the scope depth it was declared at (used to know which locals to discard when a block ends). 
 struct LocalVar {
@@ -11,20 +13,28 @@ struct LocalVar {
     int depth;
 };
 
+// Compile-time state for ONE function currently being compiled (the top-level script is FunctionState #0). 
+// Kept on a stack in Compiler so entering a nested function declaration is just push-a-new-one, compile its body, pop back to the enclosing state.
+struct FunctionState {
+    std::shared_ptr<VMFunction> function;
+    std::vector<LocalVar> locals;
+    int scopeDepth = 0;
+};
+
 class Compiler {
 public:
-    // Compiles `source` into `chunk`. Returns false (and leaves error messages printed to stderr) if a syntax error was found 
-    bool compile(const std::string& source, Chunk& chunk);
+    // Compiles `source` into a top-level VMFunction (name "<script>", arity 0) and returns it, or nullptr on a syntax error (with messages already printed to stderr) 
+    // mirrors the tree-walker's parser reporting to stderr and continuing rather than throwing, so one bad line doesn't stop the whole compile.
+    std::shared_ptr<VMFunction> compile(const std::string& source);
 
 private:
     std::vector<Token> tokens;
     size_t current = 0;
-    Chunk* chunkOut = nullptr;
     bool hadError = false;
 
-    // Compile-time scope tracking. 
-    std::vector<LocalVar> locals;
-    int scopeDepth = 0;
+    std::vector<FunctionState> functionStack;
+    FunctionState& current_() { return functionStack.back(); } // the function currently being compiled into
+    Chunk& currentChunk() { return current_().function->chunk; }
 
     // Precedence levels, lowest to highest. ASSIGNMENT sits below TERM
     // so that e.g. parsing the right-hand side of "x = 1 + 2" correctly consumes the whole "1 + 2" rather than stopping after "1".
@@ -38,6 +48,7 @@ private:
         TERM,       // + -
         FACTOR,     // * /
         UNARY,      // -x !x
+        CALL,       // . ()
         PRIMARY
     };
 
@@ -54,8 +65,11 @@ private:
     void expression();
     void declaration();
     void varDeclaration();
+    void functionDeclaration();
+    void functionBody(const std::string& name); // parses "(" params ")" "{" body "}" into a NEW FunctionState
     void statement();
     void printStatement();
+    void returnStatement();
     void expressionStatement();
     void block();       // "{" declaration* "}"
     void beginScope();
@@ -64,15 +78,20 @@ private:
     void whileStatement();
     void forStatement();
 
-    // Variable-declaration helpers, split out so varDeclaration() can
-    // stay agnostic about whether it's declaring a global or a local. the split happens here based on scopeDepth.
-    void declareVariable(const Token& name);       // records a LOCAL in `locals` (no-op at global scope)
-    void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or nothing for a local
-                                                     // (a local's "definition" is just it staying on the stack)
-    int resolveLocal(const Token& name);            // returns a local's stack slot, or -1 if not a local
+    // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local
+    // the split happens here based on scopeDepth.
+    void declareVariable(const Token& name);       // records a LOCAL in the current FunctionState (no-op at global scope)
+    void markInitialized();                         // marks the most recently declared local as ready to
+                                                    // reference — called EARLY (before compiling a function's
+                                                    // body) for function declarations, so a function can call
+                                                    // itself recursively by name; called at the normal spot
+                                                    // (after the initializer) for plain var declarations
+    void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or (for a local) just
+                                                     // calls markInitialized() — a local's "definition" is simply
+                                                     // it staying on the stack
+    int resolveLocal(FunctionState& state, const Token& name); // returns a local's stack slot, or -1 if not a local
 
-    // Prefix/infix parse rules — each assumes the relevant token was
-    // just consumed (`previous()`), and emits bytecode for it.
+    // Prefix/infix parse rules — each assumes the relevant token was just consumed (`previous()`), and emits bytecode for it.
     void number(bool canAssign);
     void stringLiteral(bool canAssign);
     void literal(bool canAssign);    // true / false / nil
@@ -82,6 +101,9 @@ private:
     void variable(bool canAssign);
     void and_(bool canAssign);
     void or_(bool canAssign);
+    void call(bool canAssign);       // the infix "(" that turns a primary expression into a function call
+
+    uint8_t argumentList(); // "(" (expression ("," expression)*)? ")" -- returns the argument count
 
     // Reads a variable name from `name`, adds it to the constant pool as a string, and returns its constant index
     uint8_t identifierConstant(const Token& name);

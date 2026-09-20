@@ -5,19 +5,24 @@
 #include <sstream>
 
 InterpretResult VM::interpret(const std::string& source) {
-    chunk = Chunk(); // fresh chunk per call — fine for now; a REPL that wants to preserve state across lines is a later concern
-    ip = 0;
+    stack.clear();
+    frames.clear();
 
     Compiler compiler;
-    if (!compiler.compile(source, chunk)) {
+    std::shared_ptr<VMFunction> script = compiler.compile(source);
+    if (!script) {
         return InterpretResult::COMPILE_ERROR;
     }
+
+    push(VMValue{script}); // the script "function" itself occupies slot 0, mirroring how
+                             // any callable sits on the stack just below its call frame
+    frames.push_back(CallFrame{script, 0, 0});
 
     return run();
 }
 
 uint8_t VM::readByte() {
-    return chunk.code[ip++];
+    return currentFrame().function->chunk.code[currentFrame().ip++];
 }
 
 uint16_t VM::readShort() {
@@ -27,7 +32,7 @@ uint16_t VM::readShort() {
 }
 
 VMValue VM::readConstant() {
-    return chunk.constants[readByte()];
+    return currentFrame().function->chunk.constants[readByte()];
 }
 
 void VM::push(VMValue value) {
@@ -57,8 +62,45 @@ bool VM::areVMEqual(const VMValue& a, const VMValue& b) {
 }
 
 void VM::runtimeError(const std::string& message) {
-    int line = (ip > 0 && ip - 1 < chunk.lines.size()) ? chunk.lines[ip - 1] : -1;
+    int line = -1;
+    if (!frames.empty()) {
+        const auto& frame = currentFrame();
+        if (frame.ip > 0 && frame.ip - 1 < frame.function->chunk.lines.size()) {
+            line = frame.function->chunk.lines[frame.ip - 1];
+        }
+    }
     std::cerr << "[line " << line << "] Runtime error: " << message << "\n";
+
+    // Unwind the whole call stack so a subsequent REPL line (if any) starts clean rather than resuming mid-call 
+    //matches the tree-walker's interpret() catching RuntimeError at the top level and abandoning the rest of that script/line's execution.
+    frames.clear();
+    stack.clear();
+}
+
+bool VM::callValue(const VMValue& callee, int argCount) {
+    if (isVMFunction(callee)) {
+        return call(asVMFunction(callee), argCount);
+    }
+    runtimeError("Can only call functions.");
+    return false;
+}
+
+bool VM::call(std::shared_ptr<VMFunction> function, int argCount) {
+    if (argCount != function->arity) {
+        std::ostringstream msg;
+        msg << "Expected " << function->arity << " arguments but got " << argCount << ".";
+        runtimeError(msg.str());
+        return false;
+    }
+
+    // stackBase points AT the callee value itself (slot 0), with
+    // arguments starting at slot 1 — this matches the compiler
+    // reserving local slot 0 for the callee in EVERY function (see
+    // Compiler::functionBody()'s comment), including the top-level
+    // script (where slot 0 is the script's own function value, pushed
+    // in VM::interpret() before its frame is created).
+    frames.push_back(CallFrame{function, 0, stack.size() - argCount - 1});
+    return true;
 }
 
 InterpretResult VM::run() {
@@ -120,6 +162,8 @@ InterpretResult VM::run() {
                     std::cout << asVMString(value) << "\n";
                 } else if (isVMBool(value)) {
                     std::cout << (asVMBool(value) ? "true" : "false") << "\n";
+                } else if (isVMFunction(value)) {
+                    std::cout << "<fn " << asVMFunction(value)->name << ">\n";
                 } else {
                     std::cout << "nil\n";
                 }
@@ -157,13 +201,12 @@ InterpretResult VM::run() {
             case OpCode::OP_GET_LOCAL: {
                 // A local's "address" is a stack index, resolved entirely at compile time.
                 uint8_t slot = readByte();
-                push(stack[slot]);
+                push(stack[currentFrame().stackBase + slot]);
                 break;
             }
             case OpCode::OP_SET_LOCAL: {
                 uint8_t slot = readByte();
-                // Same "peek, don't pop" reasoning as OP_SET_GLOBAL- assignment is an expression, so its value stays on top of the stack for whatever comes next.
-                stack[slot] = peekStack(0);
+                stack[currentFrame().stackBase + slot] = peekStack(0);
                 break;
             }
             case OpCode::OP_TRUE: {
@@ -179,7 +222,6 @@ InterpretResult VM::run() {
                 break;
             }
             case OpCode::OP_NOT: {
-                // Always yields a real bool, regardless of the operand's actual type: matches the tree-walker's Unary BANG case (result = !isTruthy(right)).
                 push(!isVMTruthy(pop()));
                 break;
             }
@@ -205,24 +247,46 @@ InterpretResult VM::run() {
             }
             case OpCode::OP_JUMP: {
                 uint16_t offset = readShort();
-                ip += offset;
+                currentFrame().ip += offset;
                 break;
             }
             case OpCode::OP_JUMP_IF_FALSE: {
                 uint16_t offset = readShort();
-                // PEEKS, does not pop, matches the tree-walker's short-circuiting if/while/and/or semantics, where the condition is explicitly popped afterward (or left on the stack as the short-circuit result).
+                // PEEKS, does not pop 
                 if (!isVMTruthy(peekStack(0))) {
-                    ip += offset;
+                    currentFrame().ip += offset;
                 }
                 break;
             }
             case OpCode::OP_LOOP: {
                 uint16_t offset = readShort();
-                ip -= offset;
+                currentFrame().ip -= offset;
+                break;
+            }
+            case OpCode::OP_CALL: {
+                int argCount = readByte();
+                // The callee sits argCount slots below the top of the stack (its arguments are all above it).
+                if (!callValue(peekStack(argCount), argCount)) {
+                    return InterpretResult::RUNTIME_ERROR;
+                }
                 break;
             }
             case OpCode::OP_RETURN: {
-                return InterpretResult::OK;
+                VMValue result = pop();
+                size_t returningFromStackBase = currentFrame().stackBase;
+                frames.pop_back();
+
+                if (frames.empty()) {
+                    // The top-level script itself returned i.e the whole program is done.
+                    return InterpretResult::OK;
+                }
+
+                // Discard everything the just-finished call left behind
+                // its callee value (at stackBase), all its arguments and locals (stackBase+1 and up) 
+                // then push the return value where the caller can use it as this whole call-expression's result.
+                stack.resize(returningFromStackBase);
+                push(result);
+                break;
             }
         }
     }
