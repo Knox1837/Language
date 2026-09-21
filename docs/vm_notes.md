@@ -30,15 +30,22 @@ Implemented: number/string/boolean/nil literals, unary `-`/`!`, binary
 (`== != > >= < <=`), logical `and`/`or` (short-circuiting, returning an
 actual operand value like the tree-walker — not necessarily a bool),
 parenthesized grouping, `print`, global and local variables with real
-lexical scoping, and now **control flow**: `if`/`else`, `while`, and
-`for` (including omitted initializer/condition/increment clauses, and a
-for-loop's own variable correctly scoped to the loop only).
+lexical scoping, control flow (`if`/`else`, `while`, `for`), and now
+**functions**: `def name(params) { ... }`, calls with argument-count
+checking, `return` (explicit or implicit nil), and full recursion
+(including mutual recursion between two functions). Functions are
+first-class values (`print someFunction;` shows `<fn name>`) and can be
+stored in variables, though there's no way to pass one as an argument
+and call it dynamically tested yet.
 
-Not yet implemented (in rough build order): functions and closures,
-classes/inheritance, string concatenation via `+` (currently number-only
-in the VM), arrays/maps, and a real garbage collector (deferred —
-likely stays on `shared_ptr`/reference counting initially, same as the
-tree-walker, until/unless GC becomes a specific goal of its own).
+Not yet implemented (in rough build order): closures (a function
+currently can only see its own parameters/locals and the global scope —
+it cannot capture a variable from an enclosing function the way the
+tree-walker's closures do), classes/inheritance, string concatenation
+via `+` (currently number-only in the VM), arrays/maps, and a real
+garbage collector (deferred — likely stays on `shared_ptr`/reference
+counting initially, same as the tree-walker, until/unless GC becomes a
+specific goal of its own).
 
 ## Architecture
 
@@ -170,6 +177,56 @@ responsible for popping it explicitly wherever that's actually correct
 for that construct — caught during code review before ever running it,
 by tracing through what `if`/`and_`/`or_` each assumed about the
 opcode's contract.
+
+## Design note: call frames and stack-slot 0
+
+Before functions existed, the VM had ONE flat `chunk`+`ip` pair for the
+entire program. Functions need each call to have its OWN instruction
+pointer (into that function's own compiled `Chunk`) and its own "window"
+into the single shared value stack — that's a `CallFrame`
+(`stackBase` + `ip` + which function it's running). `VM::run()` now
+always operates on `frames.back()`.
+
+A subtlety worth calling out: slot 0 of EVERY function's locals —
+including the top-level script, which is itself compiled as a
+zero-argument "function" so it can be pushed onto the same call-frame
+stack uniformly — is RESERVED for the callable value itself, not
+available for a user's first real local/parameter. This has to be
+consistent between the compiler (which assigns compile-time slot
+numbers to locals) and the VM (which lays out the runtime stack) or
+they silently disagree about what's in slot 0 — see the bug below,
+which is exactly that disagreement.
+
+Recursion works with no special-casing: a global function's name is
+resolved by NAME at CALL time (`OP_GET_GLOBAL`), and by the time a
+recursive call inside a function's body actually executes, that
+function's `OP_DEFINE_GLOBAL` has long since run (the whole `def`
+statement completes — including binding its own name — before the
+function is ever invoked). Mutual recursion between two functions works
+for the same reason.
+
+## Bug caught during testing: stack slot 0 collision
+
+Symptom: `{ var y = "inner"; print y; }` printed `<fn <script>>`
+instead of `"inner"`, and every statement after that block silently
+misbehaved. Root cause: the top-level script's `CallFrame` was created
+with `stackBase = 0`, and the script's own function VALUE was pushed
+onto the stack at slot 0 (`VM::interpret()`) — but the COMPILER didn't
+know slot 0 was taken, so it happily assigned slot 0 to the block's
+first declared local (`y`), and `OP_GET_LOCAL 0` read the script
+function value instead. Worse, real function CALLS used a different,
+inconsistent convention (`stackBase` pointing at the first ARGUMENT,
+not the callee) — so top-level code and function bodies disagreed
+about what "slot 0" even meant.
+
+Fixed by making both sides agree on one rule, uniformly: slot 0 is
+always reserved for the callable value itself (the compiler reserves it
+with a placeholder `LocalVar` no real identifier can match; the VM's
+`call()` points `stackBase` at the callee, not the first argument).
+Caught via a regression test that re-ran every earlier increment's
+tests together — the isolated function tests alone hadn't exercised a
+BLOCK-scoped local sitting at the very first available slot, which is
+exactly the case that exposed the mismatch.
 
 ## How to run it
 
