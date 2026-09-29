@@ -7,5 +7,6 @@ class VMFunction {
 public:
     Chunk chunk;
     int arity = 0;
+    int upvalueCount = 0;
     std::string name;
 };
