@@ -1,4 +1,4 @@
-// compiler.h:- a single-pass Pratt parser that reads tokens (reusing the existing Lexer/Token from src/lexer/) and emits bytecode directly into a Chunk, with no separate AST step.
+// compiler.h: a single-pass Pratt parser that reads tokens (reusing the existing Lexer/Token from src/lexer/) and emits bytecode directly into a Chunk, with no separate AST step.
 #pragma once
 #include <vector>
 #include <string>
@@ -11,6 +11,13 @@
 struct LocalVar {
     Token name;
     int depth;
+    bool isCaptured = false; // true once some NESTED function's closure captures this local as an upvalue — controls whether leaving its scope emits OP_CLOSE_UPVALUE (heap-preserve it) or a plain OP_POP (just discard it)
+};
+
+// Describes ONE upvalue a function captures, recorded at compile time.
+struct UpvalueInfo {
+    uint8_t index;
+    bool isLocal;
 };
 
 // Compile-time state for ONE function currently being compiled (the top-level script is FunctionState #0). 
@@ -18,6 +25,7 @@ struct LocalVar {
 struct FunctionState {
     std::shared_ptr<VMFunction> function;
     std::vector<LocalVar> locals;
+    std::vector<UpvalueInfo> upvalues;
     int scopeDepth = 0;
 };
 
@@ -90,6 +98,14 @@ private:
                                                      // calls markInitialized() — a local's "definition" is simply
                                                      // it staying on the stack
     int resolveLocal(FunctionState& state, const Token& name); // returns a local's stack slot, or -1 if not a local
+
+    // Recursively walks OUTWARD through enclosing functions to see if any of them have a local with the given name, returning its upvalue index if so, or -1 if not.
+    int resolveUpvalue(int functionIndex, const Token& name);
+
+    // Registers (or reuses, if already registered) an upvalue capture
+    // for the function at `functionIndex`, returning its index in that
+    // function's own upvalues list.
+    int addUpvalue(int functionIndex, uint8_t index, bool isLocal);
 
     // Prefix/infix parse rules — each assumes the relevant token was just consumed (`previous()`), and emits bytecode for it.
     void number(bool canAssign);

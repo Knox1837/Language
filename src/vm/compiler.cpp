@@ -19,7 +19,7 @@ std::shared_ptr<VMFunction> Compiler::compile(const std::string& source) {
     auto scriptFunction = std::make_shared<VMFunction>();
     scriptFunction->name = "<script>";
     scriptFunction->arity = 0;
-    functionStack.push_back(FunctionState{scriptFunction, {}, 0});
+    functionStack.push_back(FunctionState{scriptFunction, {}, {}, 0});
 
     functionStack.back().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, "", 0), 0});
 
@@ -65,7 +65,7 @@ void Compiler::functionDeclaration() {
 void Compiler::functionBody(const std::string& name) {
     auto function = std::make_shared<VMFunction>();
     function->name = name;
-    functionStack.push_back(FunctionState{function, {}, 0});
+    functionStack.push_back(FunctionState{function, {}, {}, 0});
 
     // Same slot-0 reservation as the top-level script
     functionStack.back().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, "", 0), 0});
@@ -82,7 +82,7 @@ void Compiler::functionBody(const std::string& name) {
             consume(TokenType::IDENTIFIER, "Expect parameter name.");
             Token paramName = previous();
             declareVariable(paramName);
-            markInitialized(); // a parameter's value is already sitting in its stack slot by the time the body runs
+            markInitialized(); // a parameter's value is already sitting in its stack slot by the time the body runs (the caller pushed it as an argument) 
         } while (match(TokenType::COMMA));
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
@@ -93,12 +93,22 @@ void Compiler::functionBody(const std::string& name) {
     emitByte(OpCode::OP_NIL); // implicit "return nil;" if the body falls off the end without an explicit return
     emitByte(OpCode::OP_RETURN);
 
+    // Capture the finished function's upvalue list BEFORE popping its FunctionState (which owns that list)
+    function->upvalueCount = static_cast<int>(current_().upvalues.size());
+    std::vector<UpvalueInfo> capturedUpvalues = std::move(current_().upvalues);
+
     // No endScope() call here
     functionStack.pop_back();
 
-    // Emit the finished function as a CONSTANT in the ENCLOSING function's chunk. 
-    // this is what "returns" the compiled function value back out to whatever's compiling the declaration itself (functionDeclaration() above, which then defines a variable for it).
-    emitConstant(VMValue{function});
+    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, 
+    // so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
+    int functionConstant = currentChunk().addConstant(VMValue{function});
+    emitByte(OpCode::OP_CLOSURE);
+    emitByte(static_cast<uint8_t>(functionConstant));
+    for (const UpvalueInfo& upvalue : capturedUpvalues) {
+        emitByte(upvalue.isLocal ? 1 : 0);
+        emitByte(upvalue.index);
+    }
 }
 
 void Compiler::varDeclaration() {
@@ -170,6 +180,48 @@ int Compiler::resolveLocal(FunctionState& state, const Token& name) {
     return -1; // not a local — caller falls back to treating it as a global
 }
 
+int Compiler::resolveUpvalue(int functionIndex, const Token& name) {
+    if (functionIndex == 0) {
+        return -1; // no enclosing function — this IS the top-level script
+    }
+    int enclosingIndex = functionIndex - 1; // functionStack is nested in compile order, so the immediately enclosing function is always right below this one
+
+    // First check: is `name` a LOCAL declared directly in the immediately enclosing function? If so, this is a one-level capture.
+    int local = resolveLocal(functionStack[enclosingIndex], name);
+    if (local != -1) {
+        // Mark it captured so its scope-exit emits OP_CLOSE_UPVALUE (heap-preserve it) instead of a plain OP_POP 
+        functionStack[enclosingIndex].locals[local].isCaptured = true;
+        return addUpvalue(functionIndex, static_cast<uint8_t>(local), true);
+    }
+
+    // Not a direct local of the enclosing function
+    int upvalue = resolveUpvalue(enclosingIndex, name);
+    if (upvalue != -1) {
+        return addUpvalue(functionIndex, static_cast<uint8_t>(upvalue), false);
+    }
+
+    return -1; // not found anywhere outward either — caller treats it as a global
+}
+
+int Compiler::addUpvalue(int functionIndex, uint8_t index, bool isLocal) {
+    auto& upvalues = functionStack[functionIndex].upvalues;
+
+    // Reuse an existing capture for the exact same (index, isLocal) pair if this function already captures it — avoids redundant duplicate upvalue slots
+    for (size_t i = 0; i < upvalues.size(); i++) {
+        if (upvalues[i].index == index && upvalues[i].isLocal == isLocal) {
+            return static_cast<int>(i);
+        }
+    }
+
+    if (upvalues.size() >= 256) {
+        errorAt(previous(), "Too many closure variables captured in one function (limit 256).");
+        return 0;
+    }
+
+    upvalues.push_back(UpvalueInfo{index, isLocal});
+    return static_cast<int>(upvalues.size() - 1);
+}
+
 void Compiler::beginScope() {
     current_().scopeDepth++;
 }
@@ -180,7 +232,11 @@ void Compiler::endScope() {
     // Pop every local that belonged to the block just exited. 
     // Emitted as individual OP_POP instructions (one per local) rather than a single "pop N" instruction
     while (!locals.empty() && locals.back().depth > current_().scopeDepth) {
-        emitByte(OpCode::OP_POP);
+        if (locals.back().isCaptured) {
+            emitByte(OpCode::OP_CLOSE_UPVALUE);
+        } else {
+            emitByte(OpCode::OP_POP);
+        }
         locals.pop_back();
     }
 }
@@ -448,9 +504,16 @@ void Compiler::variable(bool canAssign) {
         setOp = OpCode::OP_SET_LOCAL;
         operand = static_cast<uint8_t>(localSlot);
     } else {
-        getOp = OpCode::OP_GET_GLOBAL;
-        setOp = OpCode::OP_SET_GLOBAL;
-        operand = identifierConstant(name);
+        int upvalueSlot = resolveUpvalue(static_cast<int>(functionStack.size()) - 1, name);
+        if (upvalueSlot != -1) {
+            getOp = OpCode::OP_GET_UPVALUE;
+            setOp = OpCode::OP_SET_UPVALUE;
+            operand = static_cast<uint8_t>(upvalueSlot);
+        } else {
+            getOp = OpCode::OP_GET_GLOBAL;
+            setOp = OpCode::OP_SET_GLOBAL;
+            operand = identifierConstant(name);
+        }
     }
 
     if (canAssign && match(TokenType::EQUAL)) {
@@ -492,6 +555,7 @@ uint8_t Compiler::identifierConstant(const Token& name) {
 }
 
 // parse rule table
+// One entry per TokenType this increment cares about; every other token type gets {nullptr, nullptr, NONE} via the default-constructed fallback in getRule().
 
 const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule numberRule     = { &Compiler::number,       nullptr,           Precedence::NONE };

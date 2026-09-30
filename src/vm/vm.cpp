@@ -7,6 +7,7 @@
 InterpretResult VM::interpret(const std::string& source) {
     stack.clear();
     frames.clear();
+    openUpvalues.clear();
 
     Compiler compiler;
     std::shared_ptr<VMFunction> script = compiler.compile(source);
@@ -14,15 +15,19 @@ InterpretResult VM::interpret(const std::string& source) {
         return InterpretResult::COMPILE_ERROR;
     }
 
-    push(VMValue{script}); // the script "function" itself occupies slot 0, mirroring how
-                             // any callable sits on the stack just below its call frame
-    frames.push_back(CallFrame{script, 0, 0});
+    // The top-level script is wrapped in a VMClosure too (with zero upvalues , nothing encloses it), built directly here rather than via OP_CLOSURE bytecode, since there's no OUTER chunk for such an instruction to live in. 
+    // This keeps it on the same CallFrame footing as any real function from this point on.
+    auto scriptClosure = std::make_shared<VMClosure>();
+    scriptClosure->function = script;
+
+    push(VMValue{scriptClosure}); // occupies slot 0, same convention every real call uses
+    frames.push_back(CallFrame{scriptClosure, 0, 0});
 
     return run();
 }
 
 uint8_t VM::readByte() {
-    return currentFrame().function->chunk.code[currentFrame().ip++];
+    return currentFrame().closure->function->chunk.code[currentFrame().ip++];
 }
 
 uint16_t VM::readShort() {
@@ -32,7 +37,7 @@ uint16_t VM::readShort() {
 }
 
 VMValue VM::readConstant() {
-    return currentFrame().function->chunk.constants[readByte()];
+    return currentFrame().closure->function->chunk.constants[readByte()];
 }
 
 void VM::push(VMValue value) {
@@ -65,8 +70,8 @@ void VM::runtimeError(const std::string& message) {
     int line = -1;
     if (!frames.empty()) {
         const auto& frame = currentFrame();
-        if (frame.ip > 0 && frame.ip - 1 < frame.function->chunk.lines.size()) {
-            line = frame.function->chunk.lines[frame.ip - 1];
+        if (frame.ip > 0 && frame.ip - 1 < frame.closure->function->chunk.lines.size()) {
+            line = frame.closure->function->chunk.lines[frame.ip - 1];
         }
     }
     std::cerr << "[line " << line << "] Runtime error: " << message << "\n";
@@ -75,32 +80,55 @@ void VM::runtimeError(const std::string& message) {
     //matches the tree-walker's interpret() catching RuntimeError at the top level and abandoning the rest of that script/line's execution.
     frames.clear();
     stack.clear();
+    openUpvalues.clear();
 }
 
 bool VM::callValue(const VMValue& callee, int argCount) {
-    if (isVMFunction(callee)) {
-        return call(asVMFunction(callee), argCount);
+    if (isVMClosure(callee)) {
+        return call(asVMClosure(callee), argCount);
     }
     runtimeError("Can only call functions.");
     return false;
 }
 
-bool VM::call(std::shared_ptr<VMFunction> function, int argCount) {
-    if (argCount != function->arity) {
+bool VM::call(std::shared_ptr<VMClosure> closure, int argCount) {
+    if (argCount != closure->function->arity) {
         std::ostringstream msg;
-        msg << "Expected " << function->arity << " arguments but got " << argCount << ".";
+        msg << "Expected " << closure->function->arity << " arguments but got " << argCount << ".";
         runtimeError(msg.str());
         return false;
     }
 
-    // stackBase points AT the callee value itself (slot 0), with
-    // arguments starting at slot 1 — this matches the compiler
-    // reserving local slot 0 for the callee in EVERY function (see
-    // Compiler::functionBody()'s comment), including the top-level
-    // script (where slot 0 is the script's own function value, pushed
-    // in VM::interpret() before its frame is created).
-    frames.push_back(CallFrame{function, 0, stack.size() - argCount - 1});
+    // stackBase points AT the callee value itself (slot 0), with arguments starting at slot 1. this matches the compiler reserving local slot 0 for the callee in EVERY function
+    frames.push_back(CallFrame{closure, 0, stack.size() - argCount - 1});
     return true;
+}
+
+std::shared_ptr<VMUpvalue> VM::captureUpvalue(size_t stackIndex) {
+    // Reuse an existing OPEN upvalue for this exact slot if one exists
+    for (auto& existing : openUpvalues) {
+        if (!existing->isClosed && existing->stackIndex == stackIndex) {
+            return existing;
+        }
+    }
+
+    auto upvalue = std::make_shared<VMUpvalue>();
+    upvalue->isClosed = false;
+    upvalue->stackIndex = stackIndex;
+    openUpvalues.push_back(upvalue);
+    return upvalue;
+}
+
+void VM::closeUpvalues(size_t fromIndex) {
+    for (auto it = openUpvalues.begin(); it != openUpvalues.end();) {
+        if (!(*it)->isClosed && (*it)->stackIndex >= fromIndex) {
+            (*it)->closedValue = stack[(*it)->stackIndex];
+            (*it)->isClosed = true;
+            it = openUpvalues.erase(it); // no longer needs tracking as "open"
+        } else {
+            ++it;
+        }
+    }
 }
 
 InterpretResult VM::run() {
@@ -162,8 +190,8 @@ InterpretResult VM::run() {
                     std::cout << asVMString(value) << "\n";
                 } else if (isVMBool(value)) {
                     std::cout << (asVMBool(value) ? "true" : "false") << "\n";
-                } else if (isVMFunction(value)) {
-                    std::cout << "<fn " << asVMFunction(value)->name << ">\n";
+                } else if (isVMClosure(value)) {
+                    std::cout << "<fn " << asVMClosure(value)->function->name << ">\n";
                 } else {
                     std::cout << "nil\n";
                 }
@@ -194,12 +222,10 @@ InterpretResult VM::run() {
                     runtimeError("Undefined variable '" + name + "'.");
                     return InterpretResult::RUNTIME_ERROR;
                 }
-                // Assignment is itself an expression (matches the tree-walker's Assign node)
                 globals[name] = peekStack(0);
                 break;
             }
             case OpCode::OP_GET_LOCAL: {
-                // A local's "address" is a stack index, resolved entirely at compile time.
                 uint8_t slot = readByte();
                 push(stack[currentFrame().stackBase + slot]);
                 break;
@@ -252,7 +278,6 @@ InterpretResult VM::run() {
             }
             case OpCode::OP_JUMP_IF_FALSE: {
                 uint16_t offset = readShort();
-                // PEEKS, does not pop 
                 if (!isVMTruthy(peekStack(0))) {
                     currentFrame().ip += offset;
                 }
@@ -265,15 +290,61 @@ InterpretResult VM::run() {
             }
             case OpCode::OP_CALL: {
                 int argCount = readByte();
-                // The callee sits argCount slots below the top of the stack (its arguments are all above it).
                 if (!callValue(peekStack(argCount), argCount)) {
                     return InterpretResult::RUNTIME_ERROR;
                 }
                 break;
             }
+            case OpCode::OP_CLOSURE: {
+                auto function = asVMFunction(readConstant());
+                auto closure = std::make_shared<VMClosure>();
+                closure->function = function;
+
+                // Read exactly `function->upvalueCount` (isLocal, index) pairs
+                for (int i = 0; i < function->upvalueCount; i++) {
+                    uint8_t isLocal = readByte();
+                    uint8_t index = readByte();
+                    if (isLocal) {
+                        // Captures a LIVE local slot from the CURRENT (enclosing) call
+                        closure->upvalues.push_back(captureUpvalue(currentFrame().stackBase + index));
+                    } else {
+                        // Not a fresh capture: this closure just reuses an upvalue the ENCLOSING closure already has
+                        closure->upvalues.push_back(currentFrame().closure->upvalues[index]);
+                    }
+                }
+
+                push(VMValue{closure});
+                break;
+            }
+            case OpCode::OP_GET_UPVALUE: {
+                uint8_t slot = readByte();
+                auto& upvalue = currentFrame().closure->upvalues[slot];
+                push(upvalue->isClosed ? upvalue->closedValue : stack[upvalue->stackIndex]);
+                break;
+            }
+            case OpCode::OP_SET_UPVALUE: {
+                uint8_t slot = readByte();
+                auto& upvalue = currentFrame().closure->upvalues[slot];
+                if (upvalue->isClosed) {
+                    upvalue->closedValue = peekStack(0);
+                } else {
+                    stack[upvalue->stackIndex] = peekStack(0);
+                }
+                break;
+            }
+            case OpCode::OP_CLOSE_UPVALUE: {
+                // Close (if any open upvalue refers to it) the CURRENT op-of-stack slot, preserving its value independent of the stack, then discard the slot itsel
+                closeUpvalues(stack.size() - 1);
+                pop();
+                break;
+            }
             case OpCode::OP_RETURN: {
                 VMValue result = pop();
                 size_t returningFromStackBase = currentFrame().stackBase;
+
+                // Close any of THIS call's locals that some closure captured (must happen BEFORE the stack is truncated below, or open upvalues would dangle)
+                closeUpvalues(returningFromStackBase);
+
                 frames.pop_back();
 
                 if (frames.empty()) {
@@ -281,8 +352,7 @@ InterpretResult VM::run() {
                     return InterpretResult::OK;
                 }
 
-                // Discard everything the just-finished call left behind
-                // its callee value (at stackBase), all its arguments and locals (stackBase+1 and up) 
+                // Discard everything the just-finished call left behind its callee value (at stackBase), all its arguments and locals (stackBase+1 and up) 
                 // then push the return value where the caller can use it as this whole call-expression's result.
                 stack.resize(returningFromStackBase);
                 push(result);
