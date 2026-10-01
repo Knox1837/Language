@@ -30,22 +30,27 @@ Implemented: number/string/boolean/nil literals, unary `-`/`!`, binary
 (`== != > >= < <=`), logical `and`/`or` (short-circuiting, returning an
 actual operand value like the tree-walker — not necessarily a bool),
 parenthesized grouping, `print`, global and local variables with real
-lexical scoping, control flow (`if`/`else`, `while`, `for`), and now
-**functions**: `def name(params) { ... }`, calls with argument-count
-checking, `return` (explicit or implicit nil), and full recursion
-(including mutual recursion between two functions). Functions are
-first-class values (`print someFunction;` shows `<fn name>`) and can be
-stored in variables, though there's no way to pass one as an argument
-and call it dynamically tested yet.
+lexical scoping, control flow (`if`/`else`, `while`, `for`), functions
+with full recursion (including mutual recursion), and now **closures**:
+a nested function can capture a variable from an enclosing function and
+keep working correctly even after the enclosing call has returned
+(`var c = makeCounter(); c(); c();`), multiple closures capturing the
+SAME variable observe each other's mutations to it (not independent
+copies), and capturing chains correctly through more than one level of
+nesting (a function capturing a variable from its grandparent). Every
+callable value at runtime is now a closure (`VMClosure`) — even a plain
+non-capturing function is just a closure with zero captured upvalues —
+and the top-level script itself is wrapped in one too, for uniform
+call-frame handling.
 
-Not yet implemented (in rough build order): closures (a function
-currently can only see its own parameters/locals and the global scope —
-it cannot capture a variable from an enclosing function the way the
-tree-walker's closures do), classes/inheritance, string concatenation
-via `+` (currently number-only in the VM), arrays/maps, and a real
-garbage collector (deferred — likely stays on `shared_ptr`/reference
-counting initially, same as the tree-walker, until/unless GC becomes a
-specific goal of its own).
+Not yet implemented (in rough build order): classes/inheritance, string
+concatenation via `+` (currently number-only in the VM), arrays/maps,
+and a real garbage collector — closures make this considerably more
+relevant than before, since `shared_ptr` reference counting cannot
+detect or collect a REFERENCE CYCLE (e.g. a closure that captures a
+variable which itself ends up holding a reference back to that same
+closure); this remains a known, deferred limitation rather than a
+correctness bug affecting any currently-supported program shape.
 
 ## Architecture
 
@@ -227,6 +232,61 @@ Caught via a regression test that re-ran every earlier increment's
 tests together — the isolated function tests alone hadn't exercised a
 BLOCK-scoped local sitting at the very first available slot, which is
 exactly the case that exposed the mismatch.
+
+## Design note: closures and upvalues
+
+A `VMFunction` alone is just compiled code with no captured state. A
+`VMClosure` wraps one plus the SPECIFIC variables it captured at the
+moment it was created (`vm_closure.h`) — every callable value at
+runtime is a closure now, even a plain non-capturing function (zero
+upvalues) and the top-level script itself (built directly in
+`VM::interpret()` rather than via bytecode, since nothing encloses it).
+
+An upvalue (`vm_upvalue.h`) has two states:
+- **Open** — the enclosing call is still running, so the captured
+  variable still lives on the shared VM stack. The upvalue just
+  remembers WHICH stack slot to read/write.
+- **Closed** — the enclosing call has returned (or the block containing
+  the captured local has ended). The value has been copied out into the
+  upvalue's own storage, independent of the stack from that point on.
+
+**Why stack INDEX, not a raw pointer, for the open case:** the VM's
+stack is a `std::vector<VMValue>`, which can reallocate — move every
+element to a new memory block — whenever it grows. A raw `VMValue*`
+taken into it would dangle the moment that happens. An index into the
+vector stays valid across any such reallocation, since it's resolved
+fresh through `stack[index]` every time it's read or written, rather
+than dereferencing a stored address. (clox avoids this differently — its
+VM stack is a fixed-size C array that never reallocates — but since this
+VM already uses index-based access everywhere else, indices are the
+more consistent fix here too.)
+
+**Why closures sharing a captured variable actually share it:**
+`VM::captureUpvalue()` first checks whether an OPEN upvalue already
+exists for the exact stack slot being captured, and returns that SAME
+object if so, rather than creating a new one. Two nested functions
+(`inc` and `show` in the test below) that both capture the same
+enclosing `x` therefore end up holding the exact same `VMUpvalue`
+object — a write through one is visible through the other, because
+there's only one underlying object, not two independent copies.
+
+**Multi-level capturing** (a function capturing a variable from its
+*grandparent*, not its immediate parent) works via `isLocal = false`
+upvalue entries: `Compiler::resolveUpvalue()` recurses outward through
+`functionStack` by INDEX (never by stored pointer — `push_back` can
+reallocate that vector too, same reasoning as the runtime stack above),
+and each function in the chain registers its own upvalue entry pointing
+either at a direct local (`isLocal = true`) or at an upvalue its own
+immediately-enclosing function already resolved (`isLocal = false`,
+chaining through).
+
+**Tested explicitly** (not just the classic single-counter example):
+two independent closures from separate calls to the same outer function
+have independent state; two DIFFERENT closures from the SAME call share
+a mutation to their commonly-captured variable; capturing works through
+a block's scope-exit (`OP_CLOSE_UPVALUE`), not just a function's
+`OP_RETURN`; and a 3-level-deep capture chain (`outer` → `middle` →
+`inner`) resolves correctly.
 
 ## How to run it
 
