@@ -1,8 +1,14 @@
 // vm.cpp: the actual bytecode execution loop. 
 #include "vm.h"
 #include "compiler.h"
+#include "vm_native.h"
+#include "vm_stdlib.h"
 #include <iostream>
 #include <sstream>
+
+VM::VM() {
+    registerVMStdlib(globals);
+}
 
 InterpretResult VM::interpret(const std::string& source) {
     stack.clear();
@@ -87,6 +93,26 @@ bool VM::callValue(const VMValue& callee, int argCount) {
     if (isVMClosure(callee)) {
         return call(asVMClosure(callee), argCount);
     }
+    if (isVMNative(callee)) {
+        auto native = asVMNative(callee); // copy the shared_ptr: `callee` refers into the stack, which is resized below
+        if (argCount != native->arity) {
+            std::ostringstream msg;
+            msg << "Expected " << native->arity << " arguments but got " << argCount << ".";
+            runtimeError(msg.str());
+            return false;
+        }
+        std::vector<VMValue> args(stack.end() - argCount, stack.end());
+        VMValue result;
+        std::string error;
+        if (!native->fn(args, result, error)) {
+            runtimeError(error);
+            return false;
+        }
+        // Natives have no CallFrame: drop the arguments and the callee, then leave the result where the call expression's value belongs.
+        stack.resize(stack.size() - argCount - 1);
+        push(std::move(result));
+        return true;
+    }
     runtimeError("Can only call functions.");
     return false;
 }
@@ -141,11 +167,17 @@ InterpretResult VM::run() {
                 break;
             }
             case OpCode::OP_ADD: {
-                // '+' is currently number-only in the VM (no string concatenation yet) 
+                // '+' overloads, matching the tree-walker: number+number adds, string+string concatenates, anything else is an error
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, "+")) return InterpretResult::RUNTIME_ERROR;
-                push(asVMNumber(a) + asVMNumber(b));
+                if (isVMNumber(a) && isVMNumber(b)) {
+                    push(asVMNumber(a) + asVMNumber(b));
+                } else if (isVMString(a) && isVMString(b)) {
+                    push(asVMString(a) + asVMString(b));
+                } else {
+                    runtimeError("Operands must be two numbers or two strings.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
                 break;
             }
             case OpCode::OP_SUBTRACT: {
@@ -184,17 +216,7 @@ InterpretResult VM::run() {
             }
             case OpCode::OP_PRINT: {
                 VMValue value = pop();
-                if (isVMNumber(value)) {
-                    std::cout << asVMNumber(value) << "\n";
-                } else if (isVMString(value)) {
-                    std::cout << asVMString(value) << "\n";
-                } else if (isVMBool(value)) {
-                    std::cout << (asVMBool(value) ? "true" : "false") << "\n";
-                } else if (isVMClosure(value)) {
-                    std::cout << "<fn " << asVMClosure(value)->function->name << ">\n";
-                } else {
-                    std::cout << "nil\n";
-                }
+                std::cout << stringifyVMValue(value) << "\n";
                 break;
             }
             case OpCode::OP_POP: {
@@ -357,6 +379,11 @@ InterpretResult VM::run() {
                 stack.resize(returningFromStackBase);
                 push(result);
                 break;
+            }
+            default: {
+                // Only reachable through a VM/compiler bug (e.g. a new opcode with no case above), never from a user script.
+                runtimeError("Unknown opcode " + std::to_string(static_cast<int>(instruction)) + ".");
+                return InterpretResult::RUNTIME_ERROR;
             }
         }
     }

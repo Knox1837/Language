@@ -30,6 +30,7 @@ add_executable(mylang
     src/vm/chunk.cpp
     src/vm/compiler.cpp
     src/vm/vm.cpp
+    src/vm/vm_stdlib.cpp
 )
 target_include_directories(mylang PRIVATE src)
 

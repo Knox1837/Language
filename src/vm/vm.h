@@ -23,6 +23,7 @@ struct CallFrame {
 
 class VM {
 public:
+    VM(); // defines the native functions (see vm_stdlib.cpp) as globals
     // Compiles and runs `source` in one call: convenience entry point matching how main.cpp invokes the tree-walking interpreter.
     InterpretResult interpret(const std::string& source);
 
