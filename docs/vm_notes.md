@@ -26,7 +26,9 @@ statement). This is how CPython, Lua, and the JVM all work internally.
 ## Current status
 
 Implemented: number/string/boolean/nil literals, unary `-`/`!`, binary
-`+ - * /` with correct precedence and left-associativity, comparisons
+`+ - * / %` with correct precedence and left-associativity (`+` also
+concatenates two strings; any other mix of operand types is a runtime
+error, exactly as in the tree-walker), comparisons
 (`== != > >= < <=`), logical `and`/`or` (short-circuiting, returning an
 actual operand value like the tree-walker — not necessarily a bool),
 parenthesized grouping, `print`, global and local variables with real
@@ -43,14 +45,25 @@ non-capturing function is just a closure with zero captured upvalues —
 and the top-level script itself is wrapped in one too, for uniform
 call-frame handling.
 
-Not yet implemented (in rough build order): classes/inheritance, string
-concatenation via `+` (currently number-only in the VM), arrays/maps,
-and a real garbage collector — closures make this considerably more
-relevant than before, since `shared_ptr` reference counting cannot
-detect or collect a REFERENCE CYCLE (e.g. a closure that captures a
-variable which itself ends up holding a reference back to that same
-closure); this remains a known, deferred limitation rather than a
-correctness bug affecting any currently-supported program shape.
+The VM also has **native functions** (C++ code callable from a script,
+see "Design note: native functions" below): `str`, `len`, `clock`,
+`abs`, `sqrt`, `floor`. `print` and `str()` share one value formatter
+that matches the tree-walker's output.
+
+Compound assignment (`+= -= *= /= %=`) works on any variable — local,
+captured (upvalue) or global; see "Design note: `%` and compound
+assignment" below.
+
+Not yet implemented (in rough build order): the rest of the native
+standard library (only the six functions above exist so far),
+arrays/maps (and with them compound assignment on elements and fields,
+e.g. `a[i] += 1`), classes/inheritance, imports, and a real garbage
+collector — closures make this considerably more relevant than before,
+since `shared_ptr` reference counting cannot detect or collect a
+REFERENCE CYCLE (e.g. a closure that captures a variable which itself
+ends up holding a reference back to that same closure); this remains a
+known, deferred limitation rather than a correctness bug affecting any
+currently-supported program shape.
 
 ## Architecture
 
@@ -58,14 +71,24 @@ correctness bug affecting any currently-supported program shape.
   some are followed by an operand byte (e.g. `OP_CONSTANT`'s index into
   the constant pool).
 - **`vm_value.h`** — the VM's own value type, deliberately SEPARATE from
-  the tree-walker's `Value` (`src/interpreter/value.h`). Currently a
-  small `std::variant<monostate, double, string>` (nil / number /
-  string — strings now back both variable-name constants AND real
-  string literals, e.g. `print "hello";`, though `+`-concatenation on
-  them isn't wired up yet); will grow further as more types are added,
-  rather than adopting the tree-walker's `Value` wholesale (which would
-  drag in `Callable`/`LoxInstance`/etc. before the VM has any use for
-  them).
+  the tree-walker's `Value` (`src/interpreter/value.h`). A
+  `std::variant` of nil / number / bool / string / `VMFunction` /
+  `VMClosure` / `VMNative`. Strings back both variable-name constants
+  and real string literals. `VMFunction` only ever appears in a
+  chunk's constant pool (compiled code); the runtime callable is the
+  closure. The type will keep growing as more types are added, rather
+  than adopting the tree-walker's `Value` wholesale (which would drag
+  in `Callable`/`LoxInstance`/etc. before the VM has any use for
+  them). Nothing uses `std::visit` on it: values are inspected through
+  the `isVM*`/`asVM*` helpers, so adding an alternative does not break
+  existing code.
+- **`vm_function.h`** — a compiled function: its own `Chunk`, `arity`,
+  `upvalueCount`, `name`.
+- **`vm_closure.h`/`vm_upvalue.h`** — a function plus the variables it
+  captured; see "Design note: closures and upvalues".
+- **`vm_native.h`** — `VMNative`, a C++ function callable from a script.
+- **`vm_stdlib.h`/`.cpp`** — the native functions themselves, plus
+  `stringifyVMValue()`, the formatter shared by `print` and `str()`.
 - **`chunk.h`/`.cpp`** — one compiled unit: a flat byte array (`code`), a
   constant pool (`constants`), and a parallel line-number array
   (`lines`) for error reporting.
@@ -286,7 +309,120 @@ have independent state; two DIFFERENT closures from the SAME call share
 a mutation to their commonly-captured variable; capturing works through
 a block's scope-exit (`OP_CLOSE_UPVALUE`), not just a function's
 `OP_RETURN`; and a 3-level-deep capture chain (`outer` → `middle` →
-`inner`) resolves correctly.
+`inner`) resolves correctly; and a closure over a function PARAMETER
+that outlives its call (`adder(5)` returning a function that adds 5) —
+the case that exposed the return-time bug described below.
+
+## Bug caught during testing: captured variables never closed on return
+
+Symptom: on MSVC Debug, running the basic closure test
+(`makeCounter`) aborted with "vector subscript out of range". On
+unchecked builds the same bug gave silently WRONG output instead:
+`adder(5)(1)` and `adder(10)(1)` printed `2` and `2` instead of `6` and
+`11`.
+
+Root cause: a block-scoped local that gets captured is closed by
+`OP_CLOSE_UPVALUE` when the block ends. But a function BODY has no
+`endScope()` (its locals are released all at once when `OP_RETURN`
+truncates the stack), so nothing ever closed the upvalues pointing into
+the returning call's stack slots. `OP_RETURN` carried a comment saying
+it should, but the `closeUpvalues(...)` call itself was missing. After
+`stack.resize(...)`, a still-open upvalue held an index past the end of
+the stack: a checked `std::vector::operator[]` aborts, while an
+unchecked one reads whatever stale value is still sitting in the
+vector's spare capacity — which often happens to look right, so simple
+tests can pass by luck.
+
+Fix: `OP_RETURN` calls `closeUpvalues(returningFromStackBase)` BEFORE
+popping the frame and truncating the stack, so each captured variable
+is copied into its upvalue while it still exists.
+
+Why it was missed: AddressSanitizer and `_GLIBCXX_ASSERTIONS` both ran
+clean, because the stale read stayed inside the vector's capacity.
+`-D_GLIBCXX_DEBUG` (fully checked containers) reproduced the abort
+immediately. Lesson: run VM tests with checked containers as well as
+the sanitizers, and include a test that captures a PARAMETER, not just
+a local declared inside the function.
+
+## Design note: native functions
+
+A native function is C++ code a script can call. `VMNative`
+(`vm_native.h`) holds a `name`, an `arity`, and an `fn` with the
+signature `bool(args, result, error)`: on success it writes the return
+value to `result` and returns true; on failure it fills `error` and
+returns false. Natives do not throw and do not know the current line —
+`VM::callValue` turns a failure into `runtimeError(error)`, which
+attaches the line of the CALL. (The tree-walker prints `[line 0]` for
+errors raised inside natives; the VM reports the real line.)
+
+Calling a native uses no `CallFrame`: `callValue` checks the arity
+(same "Expected N arguments but got M." message as for user functions),
+copies the arguments into a vector, runs `fn`, then drops the arguments
+and the callee from the stack and pushes the result. It copies the
+`shared_ptr<VMNative>` first, because the `callee` reference points
+into the stack that is resized afterwards.
+
+Registration happens in the `VM` CONSTRUCTOR (`registerVMStdlib`), not
+in `interpret()`, so a REPL user who redefines `len` is not overwritten
+on the next line. Names, arities and error messages mirror
+`src/stdlib/` so both engines fail the same way. Adding a native is one
+`define(...)` call in `vm_stdlib.cpp`.
+
+**Shared value formatting.** `stringifyVMValue()` is used by both
+`print` and `str()`, and reproduces the tree-walker's `stringifyValue`:
+whole numbers print as integers (`10`), other numbers via
+`std::to_string` (`3.140000`). Earlier, `print` used `cout << double`
+(`3.14`), so the two engines disagreed on non-integer output and
+`str(3.14)` would have disagreed with `print 3.14`.
+
+## Design note: `+` and unknown opcodes
+
+`OP_ADD` accepts number+number (adds) and string+string (concatenates);
+anything else reports "Operands must be two numbers or two strings.",
+the tree-walker's exact message. The other arithmetic and comparison
+operators remain number-only through `requireNumbers`.
+
+`run()`'s `switch` ends with a `default:` case that reports
+`Unknown opcode N` as a runtime error. It is only reachable through a VM
+or compiler bug (such as a new opcode with no `case`), never from a user
+script. Side effect: with a `default:` present, the C++ compiler no
+longer warns about unhandled enum values (GCC `-Wswitch`, MSVC C4062),
+so when adding an opcode, check that it has a `case` in `run()`.
+
+## Design note: `%` and compound assignment
+
+`%` is its own opcode (`OP_MODULO`) built on `fmod`, not an integer
+`%`, because the only numeric type is a double: the result takes the
+sign of the dividend (`-7 % 3` is `-1`, `5.5 % 2` is `1.5`), and a zero
+divisor is the runtime error "Modulo by zero.". It shares `*` and `/`'s
+precedence through the same parse rule, so `2 + 7 % 4 * 2` groups the
+way it does in the tree-walker.
+
+Compound assignment (`+= -= *= /= %=`) adds no new opcodes.
+`Compiler::variable()` compiles `x op= value` as: read `x`, compile
+`value`, apply the operator's opcode, store back — the same bytes
+`x = x op value` produces. It therefore works identically for locals,
+upvalues and globals, `+=` concatenates strings, and every operator
+inherits the type and zero checks of its plain form. Behavior matches
+the tree-walker: `x` is read BEFORE the right side runs, the right side
+is a full expression (`x *= 2 + 3` multiplies by 5), chains are
+right-associative (`a += b += 3`), and the expression's value is the
+stored result (the `OP_SET_*` opcodes peek rather than pop, so
+`print x += 1;` prints the new value).
+
+A leftover compound operator after something that isn't a plain
+variable (`1 += 2`, `a + b += c`, `f() += 1`) is reported as "Invalid
+compound assignment target.", mirroring the stray-`=` check at the end
+of `parsePrecedence`. As with `=`, the VM compiler has no panic mode,
+so the same mistake also prints a follow-on "Expect ';'" error.
+
+Plain variables are the only targets so far, which is why naming the
+target twice (once to read it, once to write it) is harmless. Arrays
+and instances will need more: `a[i] += v` and `obj.f += v` must
+evaluate `a`, `i` and `obj` ONCE, which is why the tree-walker has
+dedicated `CompoundIndexSet`/`CompoundSet` nodes. Those targets will
+need their own compilation path (for example, duplicating the target
+values on the stack) instead of this read-then-write shortcut.
 
 ## How to run it
 

@@ -389,6 +389,19 @@ void Compiler::expressionStatement() {
 
 // expressions (Pratt parsing)
 
+// Maps a compound-assignment token (+= -= *= /= %=) to the arithmetic opcode it applies.
+// Returns false if `type` isn't one, leaving `op` untouched.
+static bool compoundAssignOp(TokenType type, OpCode& op) {
+    switch (type) {
+        case TokenType::PLUS_EQUAL:    op = OpCode::OP_ADD;      return true;
+        case TokenType::MINUS_EQUAL:   op = OpCode::OP_SUBTRACT; return true;
+        case TokenType::STAR_EQUAL:    op = OpCode::OP_MULTIPLY; return true;
+        case TokenType::SLASH_EQUAL:   op = OpCode::OP_DIVIDE;   return true;
+        case TokenType::PERCENT_EQUAL: op = OpCode::OP_MODULO;   return true;
+        default: return false;
+    }
+}
+
 void Compiler::expression() {
     parsePrecedence(Precedence::ASSIGNMENT);
 }
@@ -415,6 +428,12 @@ void Compiler::parsePrecedence(Precedence precedence) {
     // a stray "=" left over here is a real error rather than silently ignored.
     if (canAssign && match(TokenType::EQUAL)) {
         errorAt(previous(), "Invalid assignment target.");
+    }
+    // Same for a leftover compound operator (e.g. "1 += 2" or "a + b += c"); same message as the tree-walker's parser.
+    OpCode ignored = OpCode::OP_ADD;
+    if (canAssign && compoundAssignOp(peek().type, ignored)) {
+        advance();
+        errorAt(previous(), "Invalid compound assignment target.");
     }
 }
 
@@ -464,6 +483,7 @@ void Compiler::binary(bool) {
         case TokenType::MINUS:         emitByte(OpCode::OP_SUBTRACT); break;
         case TokenType::STAR:          emitByte(OpCode::OP_MULTIPLY); break;
         case TokenType::SLASH:         emitByte(OpCode::OP_DIVIDE);   break;
+        case TokenType::PERCENT:       emitByte(OpCode::OP_MODULO);   break;
         case TokenType::EQUAL_EQUAL:   emitByte(OpCode::OP_EQUAL);    break;
         case TokenType::BANG_EQUAL:    emitByte(OpCode::OP_EQUAL); emitByte(OpCode::OP_NOT); break;
         case TokenType::GREATER:       emitByte(OpCode::OP_GREATER);  break;
@@ -516,8 +536,18 @@ void Compiler::variable(bool canAssign) {
         }
     }
 
+    OpCode compoundOp = OpCode::OP_ADD; // only meaningful when compoundAssignOp() returns true below
     if (canAssign && match(TokenType::EQUAL)) {
         expression();
+        emitByte(setOp);
+        emitByte(operand);
+    } else if (canAssign && compoundAssignOp(peek().type, compoundOp)) {
+        // "x op= value" means "x = x op value": read x, evaluate value, apply op, store back.
+        advance();
+        emitByte(getOp);
+        emitByte(operand);
+        expression();
+        emitByte(compoundOp);
         emitByte(setOp);
         emitByte(operand);
     } else {
@@ -548,8 +578,7 @@ uint8_t Compiler::argumentList() {
 }
 
 uint8_t Compiler::identifierConstant(const Token& name) {
-    // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a
-    // number literal is stored as a VMValue double.
+    // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a number literal is stored as a VMValue double.
     int index = currentChunk().addConstant(VMValue{name.lexeme});
     return static_cast<uint8_t>(index);
 }
@@ -584,7 +613,8 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::MINUS:          return minusRule;
         case TokenType::PLUS:           return termRule;
         case TokenType::SLASH:
-        case TokenType::STAR:           return factorRule;
+        case TokenType::STAR:
+        case TokenType::PERCENT:        return factorRule;
         case TokenType::BANG:           return bangRule;
         case TokenType::BANG_EQUAL:
         case TokenType::EQUAL_EQUAL:    return equalityRule;

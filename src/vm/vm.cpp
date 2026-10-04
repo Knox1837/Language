@@ -3,6 +3,7 @@
 #include "compiler.h"
 #include "vm_native.h"
 #include "vm_stdlib.h"
+#include <cmath>
 #include <iostream>
 #include <sstream>
 
@@ -203,6 +204,18 @@ InterpretResult VM::run() {
                     return InterpretResult::RUNTIME_ERROR;
                 }
                 push(asVMNumber(a) / asVMNumber(b));
+                break;
+            }
+            case OpCode::OP_MODULO: {
+                VMValue b = pop();
+                VMValue a = pop();
+                if (!requireNumbers(a, b, "%")) return InterpretResult::RUNTIME_ERROR;
+                if (asVMNumber(b) == 0.0) {
+                    runtimeError("Modulo by zero.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                // fmod, not integer %, since numbers are doubles; matches the tree-walker
+                push(std::fmod(asVMNumber(a), asVMNumber(b)));
                 break;
             }
             case OpCode::OP_NEGATE: {

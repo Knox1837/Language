@@ -9,6 +9,7 @@ enum class OpCode : uint8_t {
     OP_SUBTRACT,       // pop b, pop a, push (a - b)
     OP_MULTIPLY,       // pop b, pop a, push (a * b)
     OP_DIVIDE,         // pop b, pop a, push (a / b)
+    OP_MODULO,         // pop b, pop a, push fmod(a, b) -- sign follows the dividend, like the tree-walker; b == 0 is an error
     OP_NEGATE,         // pop a, push (-a)
     OP_PRINT,          // pop a, print it
     OP_POP,            // pop and discard (used to clean up an expression-statement's unused result)
