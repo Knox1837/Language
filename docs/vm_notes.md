@@ -46,24 +46,29 @@ and the top-level script itself is wrapped in one too, for uniform
 call-frame handling.
 
 The VM also has **native functions** (C++ code callable from a script,
-see "Design note: native functions" below): `str`, `len`, `clock`,
-`abs`, `sqrt`, `floor`. `print` and `str()` share one value formatter
-that matches the tree-walker's output.
+see "Design note: native functions" below): everything in the
+tree-walker's standard library that doesn't need arrays or maps. Math:
+`clock abs sqrt pow floor ceil round min max sin cos tan log log10
+random randomInt setSeed`, plus the constants `PI` and `E`. String: `len
+str upper lower substring charAt find startsWith endsWith trim replace
+toNumber`. Type: `isNumber isString isBool isNil isFunction`. I/O:
+`input`. `print` and `str()` share one value formatter that matches the
+tree-walker's output.
 
 Compound assignment (`+= -= *= /= %=`) works on any variable — local,
 captured (upvalue) or global; see "Design note: `%` and compound
 assignment" below.
 
-Not yet implemented (in rough build order): the rest of the native
-standard library (only the six functions above exist so far),
-arrays/maps (and with them compound assignment on elements and fields,
-e.g. `a[i] += 1`), classes/inheritance, imports, and a real garbage
-collector — closures make this considerably more relevant than before,
-since `shared_ptr` reference counting cannot detect or collect a
-REFERENCE CYCLE (e.g. a closure that captures a variable which itself
-ends up holding a reference back to that same closure); this remains a
-known, deferred limitation rather than a correctness bug affecting any
-currently-supported program shape.
+Not yet implemented (in rough build order): arrays/maps together with
+the collection side of the standard library (`split`, `join`, `isArray`,
+`isMap`, and the array and map functions), including compound assignment
+on elements and fields (e.g. `a[i] += 1`), classes/inheritance, imports,
+and a real garbage collector — closures make this considerably more
+relevant than before, since `shared_ptr` reference counting cannot
+detect or collect a REFERENCE CYCLE (e.g. a closure that captures a
+variable which itself ends up holding a reference back to that same
+closure); this remains a known, deferred limitation rather than a
+correctness bug affecting any currently-supported program shape.
 
 ## Architecture
 
@@ -87,7 +92,8 @@ currently-supported program shape.
 - **`vm_closure.h`/`vm_upvalue.h`** — a function plus the variables it
   captured; see "Design note: closures and upvalues".
 - **`vm_native.h`** — `VMNative`, a C++ function callable from a script.
-- **`vm_stdlib.h`/`.cpp`** — the native functions themselves, plus
+- **`vm_stdlib.h`/`.cpp`** — the native functions themselves, grouped
+  like the tree-walker's libs (math, string, type, io), plus
   `stringifyVMValue()`, the formatter shared by `print` and `str()`.
 - **`chunk.h`/`.cpp`** — one compiled unit: a flat byte array (`code`), a
   constant pool (`constants`), and a parallel line-number array
@@ -366,7 +372,28 @@ Registration happens in the `VM` CONSTRUCTOR (`registerVMStdlib`), not
 in `interpret()`, so a REPL user who redefines `len` is not overwritten
 on the next line. Names, arities and error messages mirror
 `src/stdlib/` so both engines fail the same way. Adding a native is one
-`define(...)` call in `vm_stdlib.cpp`.
+`define(...)` call in `vm_stdlib.cpp` (or `defineMath1(...)` for a plain
+number-to-number function).
+
+`PI` and `E` are ordinary globals holding numbers, not functions, so a
+script writes `PI`, not `PI()` — and, as in the tree-walker, they are
+not protected from reassignment. The random functions share one
+`std::mt19937` for the whole program, and `setSeed(n)` makes
+`random()`/`randomInt()` reproducible. The generated numbers are the
+same as the tree-walker's when both are built with the same C++
+standard library, but `std::uniform_real_distribution` is not specified
+to the bit, so MSVC and libstdc++ produce different sequences for the
+same seed. Tests therefore check properties (same seed gives the same
+value, results stay in range) instead of exact numbers.
+
+Behaviors inherited from the tree-walker that can surprise: `len` and
+`charAt` count BYTES, so a multi-byte UTF-8 character counts as several
+and `upper`/`lower` only change ASCII letters; `toNumber` accepts
+whatever `std::stod` does (`"0x1A"` is `26`, `"inf"` and `"nan"` parse,
+leading whitespace is skipped) but rejects trailing characters, so
+`" 5 "` is an error; and index arguments such as the ones to `substring`
+and `charAt` are truncated toward zero, so `charAt("hello", 1.9)` is
+`"e"`.
 
 **Shared value formatting.** `stringifyVMValue()` is used by both
 `print` and `str()`, and reproduces the tree-walker's `stringifyValue`:
