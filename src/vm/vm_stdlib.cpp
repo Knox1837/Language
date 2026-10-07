@@ -1,5 +1,7 @@
 // vm_stdlib.cpp: native functions for the VM. Names, arities and error messages match the tree-walker's stdlib (src/stdlib/) so both engines behave the same.
 #include "vm_stdlib.h"
+#include "vm_array.h"
+#include "vm_array_lib.h"
 #include "vm_native.h"
 #include "vm_closure.h"
 #include "vm_function.h"
@@ -11,7 +13,8 @@
 #include <random>
 #include <stdexcept>
 
-std::string stringifyVMValue(const VMValue& value) {
+// `visiting` holds the arrays currently being printed, so an array that (directly or indirectly) contains itself prints "[...]" at the repeat instead of recursing until the stack overflows.
+static std::string stringifyImpl(const VMValue& value, std::vector<const VMArray*>& visiting) {
     if (isVMNil(value)) return "nil";
     if (isVMBool(value)) return asVMBool(value) ? "true" : "false";
     if (isVMNumber(value)) {
@@ -26,7 +29,26 @@ std::string stringifyVMValue(const VMValue& value) {
     if (isVMClosure(value)) return "<fn " + asVMClosure(value)->function->name + ">";
     if (isVMFunction(value)) return "<fn " + asVMFunction(value)->name + ">";
     if (isVMNative(value)) return "<native fn " + asVMNative(value)->name + ">";
+    if (isVMArray(value)) {
+        auto array = asVMArray(value);
+        if (std::find(visiting.begin(), visiting.end(), array.get()) != visiting.end()) return "[...]";
+        visiting.push_back(array.get());
+        // Elements print like top-level values (so strings appear WITHOUT quotes: [a, b]), matching the tree-walker.
+        std::string out = "[";
+        for (size_t i = 0; i < array->elements.size(); i++) {
+            if (i > 0) out += ", ";
+            out += stringifyImpl(array->elements[i], visiting);
+        }
+        out += "]";
+        visiting.pop_back();
+        return out;
+    }
     return "nil";
+}
+
+std::string stringifyVMValue(const VMValue& value) {
+    std::vector<const VMArray*> visiting;
+    return stringifyImpl(value, visiting);
 }
 
 // helpers
@@ -291,6 +313,44 @@ static void registerString(Globals& globals) {
         return true;
     });
 
+    // split(s, delimiter): an array of the pieces. A delimiter that never occurs still gives a 1-element array (Python-style); an empty delimiter is an error.
+    define(globals, "split", 2, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error) || !needString(args[1], error)) return false;
+        const std::string& s = asVMString(args[0]);
+        const std::string& delim = asVMString(args[1]);
+        if (delim.empty()) {
+            error = "delimiter must not be empty.";
+            return false;
+        }
+        auto out = std::make_shared<VMArray>();
+        size_t start = 0, pos;
+        while ((pos = s.find(delim, start)) != std::string::npos) {
+            out->elements.push_back(s.substr(start, pos - start));
+            start = pos + delim.size();
+        }
+        out->elements.push_back(s.substr(start)); // the final piece after the last delimiter
+        result = out;
+        return true;
+    });
+
+    // join(arr, delimiter): the inverse of split(); elements are stringified exactly like str()/print
+    define(globals, "join", 2, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!isVMArray(args[0])) {
+            error = "First argument must be an array.";
+            return false;
+        }
+        if (!needString(args[1], error)) return false;
+        const std::string& delim = asVMString(args[1]);
+        auto array = asVMArray(args[0]);
+        std::string out;
+        for (size_t i = 0; i < array->elements.size(); i++) {
+            if (i > 0) out += delim;
+            out += stringifyVMValue(array->elements[i]);
+        }
+        result = std::move(out);
+        return true;
+    });
+
     // toNumber(s): parses a string into a number; an error on invalid input
     define(globals, "toNumber", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
         if (!needString(args[0], error)) return false;
@@ -332,6 +392,11 @@ static void registerType(Globals& globals) {
         return true;
     });
 
+    define(globals, "isArray", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
+        result = isVMArray(args[0]);
+        return true;
+    });
+
     define(globals, "isNil", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
         result = isVMNil(args[0]);
         return true;
@@ -364,4 +429,5 @@ void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerString(globals);
     registerType(globals);
     registerIo(globals);
+    registerVMArrayLib(globals); // push, pop, length, ... (the array functions live in their own file)
 }

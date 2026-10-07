@@ -31,8 +31,7 @@ struct FunctionState {
 
 class Compiler {
 public:
-    // Compiles `source` into a top-level VMFunction (name "<script>", arity 0) and returns it, or nullptr on a syntax error (with messages already printed to stderr) 
-    // mirrors the tree-walker's parser reporting to stderr and continuing rather than throwing, so one bad line doesn't stop the whole compile.
+    // Compiles `source` into a top-level VMFunction (name "<script>", arity 0) and returns it, or nullptr on a syntax error (with messages already printed to stderr)  mirroring the tree-walker's parser reporting to stderr and continuing rather than throwing, so one bad line doesn't stop the whole compile.
     std::shared_ptr<VMFunction> compile(const std::string& source);
 
 private:
@@ -86,17 +85,10 @@ private:
     void whileStatement();
     void forStatement();
 
-    // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local
-    // the split happens here based on scopeDepth.
+    // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local the split happens here based on scopeDepth.
     void declareVariable(const Token& name);       // records a LOCAL in the current FunctionState (no-op at global scope)
-    void markInitialized();                         // marks the most recently declared local as ready to
-                                                    // reference — called EARLY (before compiling a function's
-                                                    // body) for function declarations, so a function can call
-                                                    // itself recursively by name; called at the normal spot
-                                                    // (after the initializer) for plain var declarations
-    void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or (for a local) just
-                                                     // calls markInitialized() — a local's "definition" is simply
-                                                     // it staying on the stack
+    void markInitialized();                         // marks the most recently declared local as ready tov reference 
+    void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or (for a local) just calls markInitialized()
     int resolveLocal(FunctionState& state, const Token& name); // returns a local's stack slot, or -1 if not a local
 
     // Recursively walks OUTWARD through enclosing functions to see if any of them have a local with the given name, returning its upvalue index if so, or -1 if not.
@@ -118,6 +110,9 @@ private:
     void and_(bool canAssign);
     void or_(bool canAssign);
     void call(bool canAssign);       // the infix "(" that turns a primary expression into a function call
+    void arrayLiteral(bool canAssign); // the prefix "[":  [a, b, c]
+    void index(bool canAssign);        // the infix "[":   a[i], a[i] = v, a[i] += v
+    void dot(bool canAssign);          // the infix ".":   property access (a.push)
 
     uint8_t argumentList(); // "(" (expression ("," expression)*)? ")" -- returns the argument count
 

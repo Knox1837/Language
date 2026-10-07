@@ -46,29 +46,38 @@ and the top-level script itself is wrapped in one too, for uniform
 call-frame handling.
 
 The VM also has **native functions** (C++ code callable from a script,
-see "Design note: native functions" below): everything in the
-tree-walker's standard library that doesn't need arrays or maps. Math:
-`clock abs sqrt pow floor ceil round min max sin cos tan log log10
-random randomInt setSeed`, plus the constants `PI` and `E`. String: `len
-str upper lower substring charAt find startsWith endsWith trim replace
-toNumber`. Type: `isNumber isString isBool isNil isFunction`. I/O:
-`input`. `print` and `str()` share one value formatter that matches the
-tree-walker's output.
+see "Design note: native functions" below): the whole of the
+tree-walker's standard library except `isMap` and the map functions.
+Math: `clock
+abs sqrt pow floor ceil round min max sin cos tan log log10 random
+randomInt setSeed`, plus the constants `PI` and `E`. String: `len str
+upper lower substring charAt find startsWith endsWith trim replace
+toNumber split join`. Type: `isNumber isString isBool isNil isArray
+isFunction`. Array: `push pop length contains indexOf sort reverse slice
+binarySearch`. I/O: `input`. `print` and `str()` share one value
+formatter that matches the tree-walker's output.
 
 Compound assignment (`+= -= *= /= %=`) works on any variable — local,
 captured (upvalue) or global; see "Design note: `%` and compound
 assignment" below.
 
-Not yet implemented (in rough build order): arrays/maps together with
-the collection side of the standard library (`split`, `join`, `isArray`,
-`isMap`, and the array and map functions), including compound assignment
-on elements and fields (e.g. `a[i] += 1`), classes/inheritance, imports,
-and a real garbage collector — closures make this considerably more
-relevant than before, since `shared_ptr` reference counting cannot
-detect or collect a REFERENCE CYCLE (e.g. a closure that captures a
-variable which itself ends up holding a reference back to that same
-closure); this remains a known, deferred limitation rather than a
-correctness bug affecting any currently-supported program shape.
+**Arrays** work end to end: literals (`[1, "two", [3]]`), indexing
+(`a[i]`), element assignment (`a[i] = v`), compound assignment on
+elements (`a[i] += v`, with the target evaluated once), method syntax
+(`a.push(x)`, `a.sort().reverse()`, and bound methods like `var p =
+a.push; p(1)`), and every array operation also available as a plain
+function (`push(a, x)`). See "Design note: arrays" below.
+
+Not yet implemented (in rough build order): maps, together with the map
+side of the standard library (`isMap`, the map functions, and `length`
+on maps) and compound assignment on map entries, classes/inheritance,
+imports, and a real garbage collector — closures and arrays make this
+considerably more relevant than before, since `shared_ptr` reference
+counting cannot detect or collect a REFERENCE CYCLE (a closure that
+captures a variable which ends up holding that same closure, or simply
+`push(a, a)`); this remains a known, deferred limitation rather than a
+correctness bug affecting any ordinary program shape. See "Known limits"
+below for the rest.
 
 ## Architecture
 
@@ -78,20 +87,24 @@ correctness bug affecting any currently-supported program shape.
 - **`vm_value.h`** — the VM's own value type, deliberately SEPARATE from
   the tree-walker's `Value` (`src/interpreter/value.h`). A
   `std::variant` of nil / number / bool / string / `VMFunction` /
-  `VMClosure` / `VMNative`. Strings back both variable-name constants
-  and real string literals. `VMFunction` only ever appears in a
-  chunk's constant pool (compiled code); the runtime callable is the
-  closure. The type will keep growing as more types are added, rather
-  than adopting the tree-walker's `Value` wholesale (which would drag
-  in `Callable`/`LoxInstance`/etc. before the VM has any use for
-  them). Nothing uses `std::visit` on it: values are inspected through
-  the `isVM*`/`asVM*` helpers, so adding an alternative does not break
-  existing code.
+  `VMClosure` / `VMNative` / `VMArray`. Strings back both
+  variable-name constants and real string literals. `VMFunction` only
+  ever appears in a chunk's constant pool (compiled code); the runtime
+  callable is the closure. The type will keep growing as more types are
+  added (maps next), rather than adopting the tree-walker's `Value`
+  wholesale (which would drag in `Callable`/`LoxInstance`/etc. before
+  the VM has any use for them). Nothing uses `std::visit` on it: values
+  are inspected through the `isVM*`/`asVM*` helpers, so adding an
+  alternative does not break existing code.
 - **`vm_function.h`** — a compiled function: its own `Chunk`, `arity`,
   `upvalueCount`, `name`.
 - **`vm_closure.h`/`vm_upvalue.h`** — a function plus the variables it
   captured; see "Design note: closures and upvalues".
 - **`vm_native.h`** — `VMNative`, a C++ function callable from a script.
+- **`vm_array.h`** — `VMArray`, a `std::vector<VMValue>` shared by
+  reference.
+- **`vm_array_lib.h`/`.cpp`** — the array operations, written once and
+  exposed both as free functions and as bound methods.
 - **`vm_stdlib.h`/`.cpp`** — the native functions themselves, grouped
   like the tree-walker's libs (math, string, type, io), plus
   `stringifyVMValue()`, the formatter shared by `print` and `str()`.
@@ -443,13 +456,104 @@ compound assignment target.", mirroring the stray-`=` check at the end
 of `parsePrecedence`. As with `=`, the VM compiler has no panic mode,
 so the same mistake also prints a follow-on "Expect ';'" error.
 
-Plain variables are the only targets so far, which is why naming the
-target twice (once to read it, once to write it) is harmless. Arrays
-and instances will need more: `a[i] += v` and `obj.f += v` must
-evaluate `a`, `i` and `obj` ONCE, which is why the tree-walker has
-dedicated `CompoundIndexSet`/`CompoundSet` nodes. Those targets will
-need their own compilation path (for example, duplicating the target
-values on the stack) instead of this read-then-write shortcut.
+For a plain variable, naming the target twice (once to read it, once to
+write it) is harmless. Array elements are different: `a[i] += v` must
+evaluate `a` and `i` ONCE (`a[next()] += 1` must call `next()` once),
+which is why the tree-walker has dedicated
+`CompoundIndexSet`/`CompoundSet` nodes. The VM solves it with a stack
+trick instead of new nodes: see "Design note: arrays". Maps will reuse
+the same pattern; instance fields will need their own variant when
+classes arrive.
+
+## Design note: arrays
+
+**Representation.** `VMArray` (`vm_array.h`) is a `std::vector<VMValue>`
+held through a `shared_ptr` inside the value variant, so arrays have
+REFERENCE semantics like the tree-walker's: `var b = a;` makes `b`
+another name for the same array, and `==` compares identity (`[1] ==
+[1]` is `false`, `a == a` is `true`). A literal builds a fresh array
+every time it runs. Arrays are truthy, including empty ones.
+
+**Literals.** `[a, b, c]` compiles each element in order, then
+`OP_ARRAY n`. The count is a 2-byte operand (like jump offsets), so a
+literal can hold up to 65535 elements; more is a compile error. The
+elements are simply left on the value stack and gathered from there, so
+nothing about an array's size is baked into the constant pool.
+
+**Indexing.** `a[i]` is `OP_GET_INDEX`; `a[i] = v` is `OP_SET_INDEX`,
+which pushes the assigned value back so assignment stays an expression
+(`a[0] = a[1] = 9` works). Error messages are the tree-walker's:
+"Only arrays and maps can be indexed." (worded for the maps to come),
+"Array index must be a number.", "Array index out of range.". An index
+is truncated toward zero, so `a[1.9]` is `a[1]` and `a[-0.5]` is
+`a[0]`; NaN, infinity and absurdly large values are simply out of range
+(the tree-walker casts them to `int`, which is undefined behavior).
+
+**Compound assignment on elements.** `a[i] += v` must evaluate `a` and
+`i` exactly once. The compiler emits `OP_DUP2` (which turns
+`[a i]` into `[a i a i]`), then `OP_GET_INDEX` through the copy
+(leaving `[a i current]`), the right side, the arithmetic opcode, and
+finally `OP_SET_INDEX` through the original pair. The type and range
+checks happen in that first `OP_GET_INDEX`, so a bad target fails BEFORE
+the right side runs, exactly like the tree-walker (`a[3] += f()` never
+calls `f`).
+
+**Methods.** `.` is an infix rule at the same precedence as a call and
+compiles to `OP_GET_PROPERTY name`. On an array it produces a native
+function already BOUND to that array (what the tree-walker's
+`getArrayMethod` does), which the ordinary `OP_CALL` then invokes:
+`a.push(1)`. Because the binding is captured, `var p = a.push; p(1);`
+also appends to `a`. Every property access creates a new bound native,
+so `a.push == a.push` is `false`; an `OP_INVOKE` that fuses the lookup
+and the call would avoid the allocation, and is deferred until it
+matters. A missing method is an error at the access ("Undefined array
+method 'x'."), before any call. Assigning through a dot (`a.x = 1`,
+`a.x += 1`) is a COMPILE error ("Invalid assignment target.") for now,
+where the tree-walker reports the runtime error "Only instances have
+fields."; that changes when classes give it a meaning.
+
+**One implementation, two forms.** `vm_array_lib.cpp` holds each
+operation once, taking the array plus the arguments after it. The free
+function (`push(a, x)`, 2 arguments) checks "Expected an array
+argument." and calls it; the method (`a.push(x)`, 1 argument) is the
+same function with the array captured. `length` is the one free
+function that will also accept maps, so its error already says "array
+or map". `split`, `join` and `isArray` live in `vm_stdlib.cpp` with the
+other string and type functions.
+
+**`sort` and `binarySearch`.** Elements must be all numbers or all
+strings, else "Can only sort arrays of all-numbers or all-strings."
+(with fewer than two elements nothing is compared, so any type is
+accepted). `sort` checks the whole array BEFORE sorting, because natives
+report errors by return value rather than by throwing from inside
+`std::sort`; the tree-walker throws mid-sort and can leave the array
+partly shuffled, while here a failed sort leaves it untouched. NaN sorts
+after every other number, which keeps the ordering valid for
+`std::sort`.
+
+**Printing.** `[1, 2, 3]`, with strings WITHOUT quotes (`[a, b]`),
+matching the tree-walker. An array that contains itself prints `[...]`
+at the repeat instead of recursing forever (the tree-walker overflows
+its stack on that).
+
+## Known limits
+
+- **256 constants per chunk, no deduplication.** Every number literal
+  and every use of a global name (or a property name such as `push`)
+  adds its own constant to the enclosing function's chunk, so a long
+  top-level script runs out quickly, and arrays make that easier. At
+  the moment exceeding the limit aborts the whole program with an
+  uncaught `std::runtime_error` instead of reporting a compile error.
+- **Jumps are 16-bit** (65535 bytes), as are array literal sizes.
+- **No garbage collector.** Reference cycles leak: a closure that
+  captures a variable holding itself, or an array that contains itself
+  (`push(a, a)`). Plain arrays and closures are freed normally.
+- **Very deep nesting overflows the C++ stack.** Printing, and
+  eventually freeing, a nested array recurses once per level. Measured
+  on an optimized build with an 8 MB stack: printing worked at 10,000
+  levels and crashed at 50,000; building and freeing worked at 100,000
+  and crashed at 400,000. Windows' default 1 MB stack allows roughly
+  an eighth as much. The tree-walker has the same limit.
 
 ## How to run it
 

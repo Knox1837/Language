@@ -100,8 +100,7 @@ void Compiler::functionBody(const std::string& name) {
     // No endScope() call here
     functionStack.pop_back();
 
-    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, 
-    // so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
+    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
     int functionConstant = currentChunk().addConstant(VMValue{function});
     emitByte(OpCode::OP_CLOSURE);
     emitByte(static_cast<uint8_t>(functionConstant));
@@ -577,6 +576,53 @@ uint8_t Compiler::argumentList() {
     return count;
 }
 
+void Compiler::arrayLiteral(bool) {
+    // The "[" is already consumed. Each element's value is left on the stack; OP_ARRAY then gathers them into one array.
+    int count = 0;
+    if (!check(TokenType::RIGHT_BRACKET)) {
+        do {
+            expression();
+            if (count == 65535) {
+                errorAt(previous(), "Can't have more than 65535 elements in an array literal.");
+            }
+            count++;
+        } while (match(TokenType::COMMA));
+    }
+    consume(TokenType::RIGHT_BRACKET, "Expect ']' after array elements.");
+    emitByte(OpCode::OP_ARRAY);
+    emitByte(static_cast<uint8_t>((count >> 8) & 0xFF)); // 2-byte big-endian count, like jump offsets
+    emitByte(static_cast<uint8_t>(count & 0xFF));
+}
+
+void Compiler::index(bool canAssign) {
+    // The object is already on the stack; the "[" is consumed.
+    expression();
+    consume(TokenType::RIGHT_BRACKET, "Expect ']' after index.");
+
+    OpCode compoundOp = OpCode::OP_ADD; // only meaningful when compoundAssignOp() returns true below
+    if (canAssign && match(TokenType::EQUAL)) {
+        expression();
+        emitByte(OpCode::OP_SET_INDEX);
+    } else if (canAssign && compoundAssignOp(peek().type, compoundOp)) {
+        // "a[i] op= v": unlike a plain variable, naming the target twice would evaluate `a` and `i` twice (a[next()] += 1 would call next() twice). So duplicate the already-evaluated pair instead: read through the copy, leave the original pair for the store.
+        advance();
+        emitByte(OpCode::OP_DUP2);      // [a i]         -> [a i a i]
+        emitByte(OpCode::OP_GET_INDEX); // [a i a i]     -> [a i current]   (type and range errors surface here, BEFORE the right side runs, like the tree-walker)
+        expression();                    //               -> [a i current v]
+        emitByte(compoundOp);            //               -> [a i result]
+        emitByte(OpCode::OP_SET_INDEX); //               -> [result]
+    } else {
+        emitByte(OpCode::OP_GET_INDEX);
+    }
+}
+
+void Compiler::dot(bool) {
+    // Property READS only for now (arr.push, then usually called). Assigning through a dot (a.x = 1) is deliberately not handled here: it falls through to the "Invalid assignment target." check in parsePrecedence until classes give it a meaning.
+    consume(TokenType::IDENTIFIER, "Expect property name after '.'.");
+    emitByte(OpCode::OP_GET_PROPERTY);
+    emitByte(identifierConstant(previous()));
+}
+
 uint8_t Compiler::identifierConstant(const Token& name) {
     // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a number literal is stored as a VMValue double.
     int index = currentChunk().addConstant(VMValue{name.lexeme});
@@ -600,6 +646,8 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule orRule         = { nullptr,                 &Compiler::or_,    Precedence::OR };
     static const ParseRule variableRule   = { &Compiler::variable,     nullptr,           Precedence::NONE };
     static const ParseRule parenRule      = { &Compiler::grouping,     &Compiler::call,   Precedence::CALL };
+    static const ParseRule bracketRule    = { &Compiler::arrayLiteral, &Compiler::index,  Precedence::CALL }; // '[' starts an array literal in prefix position and an index in infix position
+    static const ParseRule dotRule        = { nullptr,                 &Compiler::dot,    Precedence::CALL };
     static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
     switch (type) {
@@ -610,6 +658,8 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::NIL:            return literalRule;
         case TokenType::IDENTIFIER:     return variableRule;
         case TokenType::LEFT_PAREN:     return parenRule;
+        case TokenType::LEFT_BRACKET:   return bracketRule;
+        case TokenType::DOT:            return dotRule;
         case TokenType::MINUS:          return minusRule;
         case TokenType::PLUS:           return termRule;
         case TokenType::SLASH:

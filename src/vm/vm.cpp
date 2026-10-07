@@ -1,6 +1,8 @@
 // vm.cpp: the actual bytecode execution loop. 
 #include "vm.h"
 #include "compiler.h"
+#include "vm_array.h"
+#include "vm_array_lib.h"
 #include "vm_native.h"
 #include "vm_stdlib.h"
 #include <cmath>
@@ -67,6 +69,14 @@ bool VM::requireNumbers(const VMValue& a, const VMValue& b, const char* opName) 
     msg << "Operands to '" << opName << "' must be numbers.";
     runtimeError(msg.str());
     return false;
+}
+
+// Converts a script number into a position in an array of `size` elements
+// Returns false if the result isn't a valid position. Note -0.5 truncates to 0, so it IS valid
+static bool toArrayIndex(double d, size_t size, size_t& out) {
+    if (std::isnan(d) || d <= -1.0 || d >= static_cast<double>(size)) return false;
+    out = static_cast<size_t>(std::trunc(d));
+    return true;
 }
 
 bool VM::areVMEqual(const VMValue& a, const VMValue& b) {
@@ -372,6 +382,81 @@ InterpretResult VM::run() {
                 closeUpvalues(stack.size() - 1);
                 pop();
                 break;
+            }
+            case OpCode::OP_ARRAY: {
+                size_t count = readShort();
+                auto array = std::make_shared<VMArray>();
+                // The element values sit on top of the stack in source order; move them into the array and drop their slots.
+                auto first = stack.end() - static_cast<std::ptrdiff_t>(count);
+                array->elements.assign(std::make_move_iterator(first), std::make_move_iterator(stack.end()));
+                stack.erase(first, stack.end());
+                push(VMValue{array});
+                break;
+            }
+            case OpCode::OP_GET_INDEX: {
+                VMValue index = pop();
+                VMValue object = pop();
+                if (!isVMArray(object)) {
+                    runtimeError("Only arrays and maps can be indexed.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                if (!isVMNumber(index)) {
+                    runtimeError("Array index must be a number.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                auto array = asVMArray(object);
+                size_t i = 0;
+                if (!toArrayIndex(asVMNumber(index), array->elements.size(), i)) {
+                    runtimeError("Array index out of range.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                push(array->elements[i]);
+                break;
+            }
+            case OpCode::OP_SET_INDEX: {
+                VMValue value = pop();
+                VMValue index = pop();
+                VMValue object = pop();
+                if (!isVMArray(object)) {
+                    runtimeError("Only arrays and maps can be indexed.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                if (!isVMNumber(index)) {
+                    runtimeError("Array index must be a number.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                auto array = asVMArray(object);
+                size_t i = 0;
+                if (!toArrayIndex(asVMNumber(index), array->elements.size(), i)) {
+                    runtimeError("Array index out of range.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                array->elements[i] = value;
+                push(value); // assignment is an expression: its value is the assigned value
+                break;
+            }
+            case OpCode::OP_DUP2: {
+                // Copy both first: push() may reallocate the stack, which would invalidate references into it.
+                VMValue below = peekStack(1);
+                VMValue top = peekStack(0);
+                push(below);
+                push(top);
+                break;
+            }
+            case OpCode::OP_GET_PROPERTY: {
+                std::string name = asVMString(readConstant()); // copy: readConstant() returns a temporary
+                VMValue object = pop();
+                if (isVMArray(object)) {
+                    VMValue method;
+                    if (!getVMArrayMethod(asVMArray(object), name, method)) {
+                        runtimeError("Undefined array method '" + name + "'.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(std::move(method));
+                    break;
+                }
+                runtimeError("Only instances, arrays, maps, and modules have properties.");
+                return InterpretResult::RUNTIME_ERROR;
             }
             case OpCode::OP_RETURN: {
                 VMValue result = pop();
