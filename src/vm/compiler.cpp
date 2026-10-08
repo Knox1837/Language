@@ -49,8 +49,7 @@ void Compiler::functionDeclaration() {
     consume(TokenType::IDENTIFIER, "Expect function name.");
     Token nameToken = previous();
 
-    // Declared and immediately marked initialized BEFORE compiling the body 
-    // this is what lets the function reference its own name recursively inside its own body.
+    // Declared and immediately marked initialized BEFORE compiling the body this is what lets the function reference its own name recursively inside its own body.
     declareVariable(nameToken);
     if (current_().scopeDepth > 0) {
         markInitialized();
@@ -101,9 +100,9 @@ void Compiler::functionBody(const std::string& name) {
     functionStack.pop_back();
 
     // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
-    int functionConstant = currentChunk().addConstant(VMValue{function});
+    uint8_t functionConstant = makeConstant(VMValue{function});
     emitByte(OpCode::OP_CLOSURE);
-    emitByte(static_cast<uint8_t>(functionConstant));
+    emitByte(functionConstant);
     for (const UpvalueInfo& upvalue : capturedUpvalues) {
         emitByte(upvalue.isLocal ? 1 : 0);
         emitByte(upvalue.index);
@@ -625,7 +624,18 @@ void Compiler::dot(bool) {
 
 uint8_t Compiler::identifierConstant(const Token& name) {
     // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a number literal is stored as a VMValue double.
-    int index = currentChunk().addConstant(VMValue{name.lexeme});
+    return makeConstant(VMValue{name.lexeme});
+}
+
+uint8_t Compiler::makeConstant(VMValue value) {
+    int index = currentChunk().addConstant(std::move(value));
+    if (index < 0) {
+        if (!current_().reportedConstantOverflow) {
+            current_().reportedConstantOverflow = true;
+            errorAt(previous(), "Too many constants in one function.");
+        }
+        return 0;
+    }
     return static_cast<uint8_t>(index);
 }
 
@@ -722,8 +732,7 @@ void Compiler::errorAt(const Token& token, const std::string& message) {
 // bytecode emission
 
 int Compiler::currentLine() const {
-    // previous() is the token most recently consumed — attributing
-    // emitted bytecode to it gives reasonable line numbers for errors.
+    // previous() is the token most recently consumed attributing emitted bytecode to it gives reasonable line numbers for errors.
     return current > 0 ? tokens[current - 1].line : 0;
 }
 
@@ -736,9 +745,9 @@ void Compiler::emitByte(OpCode op) {
 }
 
 void Compiler::emitConstant(VMValue value) {
-    int index = currentChunk().addConstant(value);
+    uint8_t index = makeConstant(std::move(value));
     emitByte(OpCode::OP_CONSTANT);
-    emitByte(static_cast<uint8_t>(index));
+    emitByte(index);
 }
 
 size_t Compiler::emitJump(OpCode jumpOp) {

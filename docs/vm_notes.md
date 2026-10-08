@@ -109,8 +109,9 @@ below for the rest.
   like the tree-walker's libs (math, string, type, io), plus
   `stringifyVMValue()`, the formatter shared by `print` and `str()`.
 - **`chunk.h`/`.cpp`** — one compiled unit: a flat byte array (`code`), a
-  constant pool (`constants`), and a parallel line-number array
-  (`lines`) for error reporting.
+  constant pool (`constants`, which reuses equal numbers and strings —
+  see "Known limits"), and a parallel line-number array (`lines`) for
+  error reporting.
 - **`compiler.h`/`.cpp`** — a single-pass Pratt parser: reads tokens
   (reusing the existing `Lexer`/`Token` from `src/lexer/`) and emits
   bytecode directly, with no separate AST step. Precedence is handled
@@ -477,8 +478,9 @@ every time it runs. Arrays are truthy, including empty ones.
 **Literals.** `[a, b, c]` compiles each element in order, then
 `OP_ARRAY n`. The count is a 2-byte operand (like jump offsets), so a
 literal can hold up to 65535 elements; more is a compile error. The
-elements are simply left on the value stack and gathered from there, so
-nothing about an array's size is baked into the constant pool.
+elements are simply left on the value stack and gathered from there,
+so a literal's size never touches the constant pool (only the distinct
+numbers and strings inside it do).
 
 **Indexing.** `a[i]` is `OP_GET_INDEX`; `a[i] = v` is `OP_SET_INDEX`,
 which pushes the assigned value back so assignment stays an expression
@@ -538,12 +540,18 @@ its stack on that).
 
 ## Known limits
 
-- **256 constants per chunk, no deduplication.** Every number literal
-  and every use of a global name (or a property name such as `push`)
-  adds its own constant to the enclosing function's chunk, so a long
-  top-level script runs out quickly, and arrays make that easier. At
-  the moment exceeding the limit aborts the whole program with an
-  uncaught `std::runtime_error` instead of reporting a compile error.
+- **256 distinct constants per function.** A constant's index is a
+  single operand byte. Numbers, strings and names live in the
+  enclosing function's constant pool, and an equal number or string is
+  stored ONCE and reused (`Chunk::addConstant`), so 300 copies of
+  `x = x + 1;` need three slots; only DISTINCT values count, and each
+  function has its own pool. Going over the limit is an ordinary
+  compile error, "Too many constants in one function." (reported once
+  per function, with the line of the first constant that did not fit).
+  An earlier version had no sharing and aborted the whole program with
+  an uncaught exception; for scale, the array tests went from 129-155
+  slots in the top-level chunk to 35-56. Lifting the limit for real
+  (a wide `OP_CONSTANT_LONG` operand) is possible but not needed yet.
 - **Jumps are 16-bit** (65535 bytes), as are array literal sizes.
 - **No garbage collector.** Reference cycles leak: a closure that
   captures a variable holding itself, or an array that contains itself

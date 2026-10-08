@@ -27,6 +27,7 @@ struct FunctionState {
     std::vector<LocalVar> locals;
     std::vector<UpvalueInfo> upvalues;
     int scopeDepth = 0;
+    bool reportedConstantOverflow = false; // so a function that runs out of constants gets ONE error message, not one per extra constant
 };
 
 class Compiler {
@@ -87,7 +88,7 @@ private:
 
     // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local the split happens here based on scopeDepth.
     void declareVariable(const Token& name);       // records a LOCAL in the current FunctionState (no-op at global scope)
-    void markInitialized();                         // marks the most recently declared local as ready tov reference 
+    void markInitialized();                         // marks the most recently declared local as ready to reference
     void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or (for a local) just calls markInitialized()
     int resolveLocal(FunctionState& state, const Token& name); // returns a local's stack slot, or -1 if not a local
 
@@ -118,6 +119,10 @@ private:
 
     // Reads a variable name from `name`, adds it to the constant pool as a string, and returns its constant index
     uint8_t identifierConstant(const Token& name);
+
+    // Adds `value` to the current function's constant pool (reusing an equal number or string already there) and returns its index.
+    // If the pool is full, reports "Too many constants in one function." (once per function) and returns 0; the compile has failed by then, so that bytecode never runs.
+    uint8_t makeConstant(VMValue value);
 
     // token-stream helpers (same shape as the tree-walker's Parser)
     const Token& peek() const;

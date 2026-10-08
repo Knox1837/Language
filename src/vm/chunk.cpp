@@ -1,7 +1,7 @@
 // chunk.cpp, trivial: just appends to the parallel vectors.
 
 #include "chunk.h"
-#include <stdexcept>
+#include <cmath>
 
 void Chunk::write(uint8_t byte, int line) {
     code.push_back(byte);
@@ -12,11 +12,26 @@ void Chunk::write(OpCode op, int line) {
     write(static_cast<uint8_t>(op), line);
 }
 
-int Chunk::addConstant(VMValue value) {
-    if (constants.size() >= 256) {
-        throw std::runtime_error("Too many constants in one chunk (limit 256 for this increment).");
+// Two constants are interchangeable only if they are the same kind of value AND the same value.
+// Only numbers and strings are ever shared: they are immutable, and they are exactly what a script repeats (a variable name used twenty times, the literal 1).
+// Function constants are never shared -- each compiled function is its own object.
+static bool sameConstant(const VMValue& a, const VMValue& b) {
+    if (isVMNumber(a) && isVMNumber(b)) {
+        double x = asVMNumber(a), y = asVMNumber(b);
+        return x == y && std::signbit(x) == std::signbit(y); // the signbit check keeps 0.0 and -0.0 apart, since == treats them as equal
     }
-    constants.push_back(value);
+    if (isVMString(a) && isVMString(b)) return asVMString(a) == asVMString(b);
+    return false;
+}
+
+int Chunk::addConstant(VMValue value) {
+    // Reuse an existing slot when possible. This runs BEFORE the limit check, so a full pool can still be referenced again.
+    // A linear scan as the pool never holds more than 256 entries.
+    for (size_t i = 0; i < constants.size(); i++) {
+        if (sameConstant(constants[i], value)) return static_cast<int>(i);
+    }
+    if (constants.size() >= 256) return -1; // a constant's index is a single operand byte; the compiler reports this as a normal compile error
+    constants.push_back(std::move(value));
     return static_cast<int>(constants.size() - 1);
 }
 
