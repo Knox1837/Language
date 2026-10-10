@@ -46,16 +46,15 @@ and the top-level script itself is wrapped in one too, for uniform
 call-frame handling.
 
 The VM also has **native functions** (C++ code callable from a script,
-see "Design note: native functions" below): the whole of the
-tree-walker's standard library except `isMap` and the map functions.
-Math: `clock
-abs sqrt pow floor ceil round min max sin cos tan log log10 random
-randomInt setSeed`, plus the constants `PI` and `E`. String: `len str
-upper lower substring charAt find startsWith endsWith trim replace
-toNumber split join`. Type: `isNumber isString isBool isNil isArray
-isFunction`. Array: `push pop length contains indexOf sort reverse slice
-binarySearch`. I/O: `input`. `print` and `str()` share one value
-formatter that matches the tree-walker's output.
+see "Design note: native functions" below): the tree-walker's whole
+standard library. Math: `clock abs sqrt pow floor ceil round min max sin
+cos tan log log10 random randomInt setSeed`, plus the constants `PI` and
+`E`. String: `len str upper lower substring charAt find startsWith
+endsWith trim replace toNumber split join`. Type: `isNumber isString
+isBool isNil isArray isMap isFunction`. Array: `push pop length contains
+indexOf sort reverse slice binarySearch`. Map: `keys values hasKey
+remove` (and `length` accepts maps too). I/O: `input`. `print` and
+`str()` share one value formatter that matches the tree-walker's output.
 
 Compound assignment (`+= -= *= /= %=`) works on any variable — local,
 captured (upvalue) or global; see "Design note: `%` and compound
@@ -68,16 +67,21 @@ elements (`a[i] += v`, with the target evaluated once), method syntax
 a.push; p(1)`), and every array operation also available as a plain
 function (`push(a, x)`). See "Design note: arrays" below.
 
-Not yet implemented (in rough build order): maps, together with the map
-side of the standard library (`isMap`, the map functions, and `length`
-on maps) and compound assignment on map entries, classes/inheritance,
-imports, and a real garbage collector — closures and arrays make this
-considerably more relevant than before, since `shared_ptr` reference
-counting cannot detect or collect a REFERENCE CYCLE (a closure that
-captures a variable which ends up holding that same closure, or simply
-`push(a, a)`); this remains a known, deferred limitation rather than a
-correctness bug affecting any ordinary program shape. See "Known limits"
-below for the rest.
+**Maps** work the same way: literals (`{"a": 1, "b": [2]}`,
+string-literal keys only), lookup and insertion by key (`m["a"]`,
+`m["c"] = 3`), compound assignment on entries (`m["a"] += 1`), method
+syntax (`m.keys()`, `m.hasKey("a")`), and the same operations as plain
+functions (`keys(m)`). Entries print and iterate in sorted key order.
+See "Design note: maps" below.
+
+Not yet implemented (in rough build order): classes/inheritance,
+imports, and a real garbage collector — closures, arrays and maps make
+this considerably more relevant than before, since `shared_ptr`
+reference counting cannot detect or collect a REFERENCE CYCLE (a closure
+that captures a variable which ends up holding that same closure, or
+simply `push(a, a)` or `m["self"] = m`); this remains a known, deferred
+limitation rather than a correctness bug affecting any ordinary program
+shape. See "Known limits" below for the rest.
 
 ## Architecture
 
@@ -87,13 +91,13 @@ below for the rest.
 - **`vm_value.h`** — the VM's own value type, deliberately SEPARATE from
   the tree-walker's `Value` (`src/interpreter/value.h`). A
   `std::variant` of nil / number / bool / string / `VMFunction` /
-  `VMClosure` / `VMNative` / `VMArray`. Strings back both
+  `VMClosure` / `VMNative` / `VMArray` / `VMMap`. Strings back both
   variable-name constants and real string literals. `VMFunction` only
   ever appears in a chunk's constant pool (compiled code); the runtime
   callable is the closure. The type will keep growing as more types are
-  added (maps next), rather than adopting the tree-walker's `Value`
-  wholesale (which would drag in `Callable`/`LoxInstance`/etc. before
-  the VM has any use for them). Nothing uses `std::visit` on it: values
+  added (instances next), rather than adopting the tree-walker's
+  `Value` wholesale (which would drag in `Callable`/`LoxInstance`/etc.
+  before the VM has any use for them). Nothing uses `std::visit` on it: values
   are inspected through the `isVM*`/`asVM*` helpers, so adding an
   alternative does not break existing code.
 - **`vm_function.h`** — a compiled function: its own `Chunk`, `arity`,
@@ -104,6 +108,10 @@ below for the rest.
 - **`vm_array.h`** — `VMArray`, a `std::vector<VMValue>` shared by
   reference.
 - **`vm_array_lib.h`/`.cpp`** — the array operations, written once and
+  exposed both as free functions and as bound methods.
+- **`vm_map.h`** — `VMMap`, a sorted `std::map<std::string, VMValue>`
+  shared by reference.
+- **`vm_map_lib.h`/`.cpp`** — the map operations, written once and
   exposed both as free functions and as bound methods.
 - **`vm_stdlib.h`/`.cpp`** — the native functions themselves, grouped
   like the tree-walker's libs (math, string, type, io), plus
@@ -458,13 +466,13 @@ of `parsePrecedence`. As with `=`, the VM compiler has no panic mode,
 so the same mistake also prints a follow-on "Expect ';'" error.
 
 For a plain variable, naming the target twice (once to read it, once to
-write it) is harmless. Array elements are different: `a[i] += v` must
-evaluate `a` and `i` ONCE (`a[next()] += 1` must call `next()` once),
-which is why the tree-walker has dedicated
+write it) is harmless. Array elements and map entries are different:
+`a[i] += v` must evaluate `a` and `i` ONCE (`a[next()] += 1` must call
+`next()` once), which is why the tree-walker has dedicated
 `CompoundIndexSet`/`CompoundSet` nodes. The VM solves it with a stack
-trick instead of new nodes: see "Design note: arrays". Maps will reuse
-the same pattern; instance fields will need their own variant when
-classes arrive.
+trick instead of new nodes, shared by arrays and maps: see "Design note:
+arrays". Instance fields will need their own variant when classes
+arrive.
 
 ## Design note: arrays
 
@@ -485,8 +493,8 @@ numbers and strings inside it do).
 **Indexing.** `a[i]` is `OP_GET_INDEX`; `a[i] = v` is `OP_SET_INDEX`,
 which pushes the assigned value back so assignment stays an expression
 (`a[0] = a[1] = 9` works). Error messages are the tree-walker's:
-"Only arrays and maps can be indexed." (worded for the maps to come),
-"Array index must be a number.", "Array index out of range.". An index
+"Only arrays and maps can be indexed.", "Array index must be a
+number.", "Array index out of range.". An index
 is truncated toward zero, so `a[1.9]` is `a[1]` and `a[-0.5]` is
 `a[0]`; NaN, infinity and absurdly large values are simply out of range
 (the tree-walker casts them to `int`, which is undefined behavior).
@@ -518,10 +526,10 @@ fields."; that changes when classes give it a meaning.
 operation once, taking the array plus the arguments after it. The free
 function (`push(a, x)`, 2 arguments) checks "Expected an array
 argument." and calls it; the method (`a.push(x)`, 1 argument) is the
-same function with the array captured. `length` is the one free
-function that will also accept maps, so its error already says "array
-or map". `split`, `join` and `isArray` live in `vm_stdlib.cpp` with the
-other string and type functions.
+same function with the array captured. `length` is the one free function
+shared with maps: it accepts either, and its error says "Expected an
+array or map argument.". `split`, `join` and `isArray` live in
+`vm_stdlib.cpp` with the other string and type functions.
 
 **`sort` and `binarySearch`.** Elements must be all numbers or all
 strings, else "Can only sort arrays of all-numbers or all-strings."
@@ -538,6 +546,60 @@ matching the tree-walker. An array that contains itself prints `[...]`
 at the repeat instead of recursing forever (the tree-walker overflows
 its stack on that).
 
+## Design note: maps
+
+**Representation.** `VMMap` (`vm_map.h`) is a
+`std::map<std::string, VMValue>` behind a `shared_ptr`. Like arrays,
+maps have REFERENCE semantics (`var b = a;` aliases the same map, `==`
+compares identity, `{} == {}` is `false`) and are always truthy. Keys
+are strings only. Because the container is a sorted `std::map`,
+`keys()`, `values()` and printing come out in byte-wise key order, NOT
+insertion order (`"B"` sorts before `"a"`), exactly like the
+tree-walker.
+
+**Literals.** `{"a": 1, "b": 2}` compiles each entry as its key (a
+string constant) followed by its value, then `OP_MAP n` with a 2-byte
+entry count. Keys must be string LITERALS: `{a: 1}` and `{1: 2}` are
+compile errors ("Expect string key in map literal."). Values are
+evaluated in source order, and a repeated key keeps its LAST value
+(`{"a": 1, "a": 2}` is `{"a": 2}`). A `{` at the start of a statement
+is always a block, in both engines, so a map literal needs an
+expression context (`var m = {};`, `print {...};`).
+
+**Indexing.** Maps share `OP_GET_INDEX`/`OP_SET_INDEX` with arrays,
+dispatching on the object. Reading requires a string key ("Map key must
+be a string.") that exists ("Undefined map key 'k'."); writing INSERTS
+a new key or replaces an existing one, because maps grow freely where
+arrays have fixed positions. `m["k"] += v` goes through the same
+`OP_DUP2` sequence as arrays, so the lookup and its missing-key error
+happen BEFORE the right side runs and `m[nextKey()] += 1` calls
+`nextKey()` once. As in the tree-walker that makes `m["new"] += 1` an
+error ("Undefined map key") rather than a way to create the key.
+
+**Methods, never entries.** `.name` on a map always means a method
+(`keys values hasKey remove length`), never an entry: `m.a` is
+"Undefined map method 'a'." even when the key `"a"` exists. Entries are
+reached with `m["a"]`. Method access builds a bound native exactly like
+arrays do (`var k = m.keys; k()`), and `m.x = 1` is the same compile
+error as on arrays until classes arrive.
+
+**One implementation, two forms.** `vm_map_lib.cpp` mirrors
+`vm_array_lib.cpp`: `keys(m)`/`m.keys()`, `values`,
+`hasKey(m, k)`/`m.hasKey(k)`, and `remove(m, k)`/`m.remove(k)` (true if
+the key existed). `length` exists as a method in each library, while
+the free `length(x)` is a single function in `vm_array_lib.cpp` that
+accepts an array or a map. `keys()` and `values()` return NEW arrays
+(snapshots): later changes to the map don't show up in an array already
+returned. Errors: "Expected a map argument." from the free functions,
+"Key must be a string." from `hasKey`/`remove`, and "Undefined map
+method 'x'." on a bad method name.
+
+**Printing.** `{"a": 1, "b": text}`: keys quoted, values printed like
+top-level values (so strings appear without quotes), entries in key
+order. A map that contains itself prints `{...}` at the repeat, using
+the same guard as the array `[...]`, so arrays and maps nested in each
+other in a cycle terminate too.
+
 ## Known limits
 
 - **256 distinct constants per function.** A constant's index is a
@@ -550,18 +612,24 @@ its stack on that).
   per function, with the line of the first constant that did not fit).
   An earlier version had no sharing and aborted the whole program with
   an uncaught exception; for scale, the array tests went from 129-155
-  slots in the top-level chunk to 35-56. Lifting the limit for real
+  slots in the top-level chunk to 35-56. Map literals feel this limit
+  most, because every entry needs its key AND its value: about 125
+  entries with distinct numeric values already overflow (the
+  tree-walker has no such limit), though values that are variables, or
+  strings already in the pool, are cheaper. Lifting the limit for real
   (a wide `OP_CONSTANT_LONG` operand) is possible but not needed yet.
-- **Jumps are 16-bit** (65535 bytes), as are array literal sizes.
+- **Jumps are 16-bit** (65535 bytes), as are array and map literal
+  sizes.
 - **No garbage collector.** Reference cycles leak: a closure that
-  captures a variable holding itself, or an array that contains itself
-  (`push(a, a)`). Plain arrays and closures are freed normally.
+  captures a variable holding itself, or an array or map that contains
+  itself (`push(a, a)`, `m["self"] = m`). Plain arrays, maps and
+  closures are freed normally.
 - **Very deep nesting overflows the C++ stack.** Printing, and
-  eventually freeing, a nested array recurses once per level. Measured
-  on an optimized build with an 8 MB stack: printing worked at 10,000
-  levels and crashed at 50,000; building and freeing worked at 100,000
-  and crashed at 400,000. Windows' default 1 MB stack allows roughly
-  an eighth as much. The tree-walker has the same limit.
+  eventually freeing, a nested array or map recurses once per level.
+  Measured for arrays on an optimized build with an 8 MB stack: printing
+  worked at 10,000 levels and crashed at 50,000; building and freeing
+  worked at 100,000 and crashed at 400,000. Windows' default 1 MB stack
+  allows roughly an eighth as much. The tree-walker has the same limit.
 
 ## How to run it
 

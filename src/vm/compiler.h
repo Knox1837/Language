@@ -112,6 +112,7 @@ private:
     void or_(bool canAssign);
     void call(bool canAssign);       // the infix "(" that turns a primary expression into a function call
     void arrayLiteral(bool canAssign); // the prefix "[":  [a, b, c]
+    void mapLiteral(bool canAssign);   // the prefix "{":  {"a": 1, "b": 2}  (a "{" at the START of a statement is a block, handled in statement())
     void index(bool canAssign);        // the infix "[":   a[i], a[i] = v, a[i] += v
     void dot(bool canAssign);          // the infix ".":   property access (a.push)
 

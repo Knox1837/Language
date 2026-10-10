@@ -2,6 +2,8 @@
 #include "vm_stdlib.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
+#include "vm_map.h"
+#include "vm_map_lib.h"
 #include "vm_native.h"
 #include "vm_closure.h"
 #include "vm_function.h"
@@ -13,8 +15,8 @@
 #include <random>
 #include <stdexcept>
 
-// `visiting` holds the arrays currently being printed, so an array that (directly or indirectly) contains itself prints "[...]" at the repeat instead of recursing until the stack overflows.
-static std::string stringifyImpl(const VMValue& value, std::vector<const VMArray*>& visiting) {
+// `visiting` holds the arrays and maps currently being printed, so one that (directly or indirectly) contains itself prints "[...]" / "{...}" at the repeat instead of recursing until the stack overflows.
+static std::string stringifyImpl(const VMValue& value, std::vector<const void*>& visiting) {
     if (isVMNil(value)) return "nil";
     if (isVMBool(value)) return asVMBool(value) ? "true" : "false";
     if (isVMNumber(value)) {
@@ -43,11 +45,27 @@ static std::string stringifyImpl(const VMValue& value, std::vector<const VMArray
         visiting.pop_back();
         return out;
     }
+    if (isVMMap(value)) {
+        auto map = asVMMap(value);
+        if (std::find(visiting.begin(), visiting.end(), map.get()) != visiting.end()) return "{...}";
+        visiting.push_back(map.get());
+        // Like the tree-walker: keys are quoted, values print like top-level values, and entries come out in key-sorted order.
+        std::string out = "{";
+        bool first = true;
+        for (const auto& entry : map->entries) {
+            if (!first) out += ", ";
+            first = false;
+            out += "\"" + entry.first + "\": " + stringifyImpl(entry.second, visiting);
+        }
+        out += "}";
+        visiting.pop_back();
+        return out;
+    }
     return "nil";
 }
 
 std::string stringifyVMValue(const VMValue& value) {
-    std::vector<const VMArray*> visiting;
+    std::vector<const void*> visiting;
     return stringifyImpl(value, visiting);
 }
 
@@ -397,6 +415,11 @@ static void registerType(Globals& globals) {
         return true;
     });
 
+    define(globals, "isMap", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
+        result = isVMMap(args[0]);
+        return true;
+    });
+
     define(globals, "isNil", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
         result = isVMNil(args[0]);
         return true;
@@ -430,4 +453,5 @@ void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerType(globals);
     registerIo(globals);
     registerVMArrayLib(globals); // push, pop, length, ... (the array functions live in their own file)
+    registerVMMapLib(globals);   // keys, values, hasKey, remove
 }

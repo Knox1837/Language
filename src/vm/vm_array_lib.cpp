@@ -1,6 +1,7 @@
 // vm_array_lib.cpp: array operations, written ONCE and exposed two ways, like the tree-walker's array_lib.cpp (free functions) and array_methods.cpp (bound methods) combined.
 #include "vm_array_lib.h"
 #include "vm_array.h"
+#include "vm_map.h"
 #include "vm_native.h"
 #include <algorithm>
 #include <cmath>
@@ -177,6 +178,10 @@ void registerVMArrayLib(std::unordered_map<std::string, VMValue>& globals) {
         globals[op.name] = VMValue{std::make_shared<VMNative>(
             op.name, op.arity + 1,
             [fn, isLength](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+                if (isLength && isVMMap(args[0])) {
+                    result = static_cast<double>(asVMMap(args[0])->entries.size());
+                    return true;
+                }
                 if (!isVMArray(args[0])) {
                     error = isLength ? "Expected an array or map argument." : "Expected an array argument.";
                     return false;

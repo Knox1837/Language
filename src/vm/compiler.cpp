@@ -593,6 +593,27 @@ void Compiler::arrayLiteral(bool) {
     emitByte(static_cast<uint8_t>(count & 0xFF));
 }
 
+void Compiler::mapLiteral(bool) {
+    // The "{" is already consumed. Keys must be string LITERALS (like the tree-walker); each entry leaves its key, then its value, on the stack, and OP_MAP gathers them all.
+    int count = 0;
+    if (!check(TokenType::RIGHT_BRACE)) {
+        do {
+            consume(TokenType::STRING, "Expect string key in map literal.");
+            emitConstant(VMValue{previous().lexeme});
+            consume(TokenType::COLON, "Expect ':' after map key.");
+            expression();
+            if (count == 65535) {
+                errorAt(previous(), "Can't have more than 65535 entries in a map literal.");
+            }
+            count++;
+        } while (match(TokenType::COMMA));
+    }
+    consume(TokenType::RIGHT_BRACE, "Expect '}' after map entries.");
+    emitByte(OpCode::OP_MAP);
+    emitByte(static_cast<uint8_t>((count >> 8) & 0xFF)); // 2-byte big-endian count, like array literals and jumps
+    emitByte(static_cast<uint8_t>(count & 0xFF));
+}
+
 void Compiler::index(bool canAssign) {
     // The object is already on the stack; the "[" is consumed.
     expression();
@@ -658,6 +679,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule parenRule      = { &Compiler::grouping,     &Compiler::call,   Precedence::CALL };
     static const ParseRule bracketRule    = { &Compiler::arrayLiteral, &Compiler::index,  Precedence::CALL }; // '[' starts an array literal in prefix position and an index in infix position
     static const ParseRule dotRule        = { nullptr,                 &Compiler::dot,    Precedence::CALL };
+    static const ParseRule braceRule      = { &Compiler::mapLiteral,   nullptr,           Precedence::NONE }; // prefix only: a map literal
     static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
     switch (type) {
@@ -669,6 +691,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::IDENTIFIER:     return variableRule;
         case TokenType::LEFT_PAREN:     return parenRule;
         case TokenType::LEFT_BRACKET:   return bracketRule;
+        case TokenType::LEFT_BRACE:     return braceRule;
         case TokenType::DOT:            return dotRule;
         case TokenType::MINUS:          return minusRule;
         case TokenType::PLUS:           return termRule;

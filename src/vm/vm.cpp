@@ -3,6 +3,8 @@
 #include "compiler.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
+#include "vm_map.h"
+#include "vm_map_lib.h"
 #include "vm_native.h"
 #include "vm_stdlib.h"
 #include <cmath>
@@ -396,43 +398,79 @@ InterpretResult VM::run() {
             case OpCode::OP_GET_INDEX: {
                 VMValue index = pop();
                 VMValue object = pop();
-                if (!isVMArray(object)) {
-                    runtimeError("Only arrays and maps can be indexed.");
-                    return InterpretResult::RUNTIME_ERROR;
+                if (isVMArray(object)) {
+                    if (!isVMNumber(index)) {
+                        runtimeError("Array index must be a number.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    auto array = asVMArray(object);
+                    size_t i = 0;
+                    if (!toArrayIndex(asVMNumber(index), array->elements.size(), i)) {
+                        runtimeError("Array index out of range.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(array->elements[i]);
+                    break;
                 }
-                if (!isVMNumber(index)) {
-                    runtimeError("Array index must be a number.");
-                    return InterpretResult::RUNTIME_ERROR;
+                if (isVMMap(object)) {
+                    if (!isVMString(index)) {
+                        runtimeError("Map key must be a string.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    auto map = asVMMap(object);
+                    auto found = map->entries.find(asVMString(index));
+                    if (found == map->entries.end()) {
+                        runtimeError("Undefined map key '" + asVMString(index) + "'.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(found->second);
+                    break;
                 }
-                auto array = asVMArray(object);
-                size_t i = 0;
-                if (!toArrayIndex(asVMNumber(index), array->elements.size(), i)) {
-                    runtimeError("Array index out of range.");
-                    return InterpretResult::RUNTIME_ERROR;
-                }
-                push(array->elements[i]);
-                break;
+                runtimeError("Only arrays and maps can be indexed.");
+                return InterpretResult::RUNTIME_ERROR;
             }
             case OpCode::OP_SET_INDEX: {
                 VMValue value = pop();
                 VMValue index = pop();
                 VMValue object = pop();
-                if (!isVMArray(object)) {
-                    runtimeError("Only arrays and maps can be indexed.");
-                    return InterpretResult::RUNTIME_ERROR;
+                if (isVMArray(object)) {
+                    if (!isVMNumber(index)) {
+                        runtimeError("Array index must be a number.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    auto array = asVMArray(object);
+                    size_t i = 0;
+                    if (!toArrayIndex(asVMNumber(index), array->elements.size(), i)) {
+                        runtimeError("Array index out of range.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    array->elements[i] = value;
+                    push(value); // assignment is an expression: its value is the assigned value
+                    break;
                 }
-                if (!isVMNumber(index)) {
-                    runtimeError("Array index must be a number.");
-                    return InterpretResult::RUNTIME_ERROR;
+                if (isVMMap(object)) {
+                    if (!isVMString(index)) {
+                        runtimeError("Map key must be a string.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    // Unlike arrays (fixed positions), maps grow freely: assigning a new key inserts it.
+                    asVMMap(object)->entries[asVMString(index)] = value;
+                    push(value);
+                    break;
                 }
-                auto array = asVMArray(object);
-                size_t i = 0;
-                if (!toArrayIndex(asVMNumber(index), array->elements.size(), i)) {
-                    runtimeError("Array index out of range.");
-                    return InterpretResult::RUNTIME_ERROR;
+                runtimeError("Only arrays and maps can be indexed.");
+                return InterpretResult::RUNTIME_ERROR;
+            }
+            case OpCode::OP_MAP: {
+                size_t count = readShort();
+                auto map = std::make_shared<VMMap>();
+                // The stack holds key, value, key, value, ... in source order. Assigning in that order means a repeated key keeps its LAST value, like the tree-walker.
+                auto first = stack.end() - static_cast<std::ptrdiff_t>(count * 2);
+                for (auto it = first; it != stack.end(); it += 2) {
+                    map->entries[asVMString(*it)] = std::move(*(it + 1));
                 }
-                array->elements[i] = value;
-                push(value); // assignment is an expression: its value is the assigned value
+                stack.erase(first, stack.end());
+                push(VMValue{map});
                 break;
             }
             case OpCode::OP_DUP2: {
@@ -450,6 +488,15 @@ InterpretResult VM::run() {
                     VMValue method;
                     if (!getVMArrayMethod(asVMArray(object), name, method)) {
                         runtimeError("Undefined array method '" + name + "'.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(std::move(method));
+                    break;
+                }
+                if (isVMMap(object)) {
+                    VMValue method;
+                    if (!getVMMapMethod(asVMMap(object), name, method)) {
+                        runtimeError("Undefined map method '" + name + "'.");
                         return InterpretResult::RUNTIME_ERROR;
                     }
                     push(std::move(method));
