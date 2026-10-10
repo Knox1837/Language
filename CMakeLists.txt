@@ -32,6 +32,7 @@ add_executable(mylang
     src/vm/vm.cpp
     src/vm/vm_stdlib.cpp
     src/vm/vm_array_lib.cpp
+    src/vm/vm_map_lib.cpp
 )
 target_include_directories(mylang PRIVATE src)
 

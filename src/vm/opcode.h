@@ -48,8 +48,9 @@ enum class OpCode : uint8_t {
                         // pop the current CallFrame, resume the caller with that return value pushed
                         // onto ITS stack. At the top level (no caller), this means the program is done.
     OP_ARRAY,          // operand: a 2-byte element count N. Pops the top N values (in the order they were pushed), builds an array from them, pushes it
-    OP_GET_INDEX,      // pop index, pop object, push object[index] -- arrays only for now; errors if the index isn't a number or is out of range
-    OP_SET_INDEX,      // pop value, pop index, pop object, store object[index] = value, then push the VALUE back (assignment is an expression)
+    OP_GET_INDEX,      // pop index, pop object, push object[index]: an array (numeric index, must be in range) or a map (string key, must exist)
+    OP_SET_INDEX,      // pop value, pop index, pop object, store object[index] = value, then push the VALUE back (assignment is an expression). On a map this also INSERTS a new key
     OP_DUP2,           // duplicate the top TWO values: [.. a b] becomes [.. a b a b]. Used by compound assignment to a[i] so that `a` and `i` are evaluated ONCE
-    OP_GET_PROPERTY,   // operand: constant-pool index of a name. Pops an object, pushes its property of that name (for an array: the method, bound to it)
+    OP_GET_PROPERTY,   // operand: constant-pool index of a name. Pops an object, pushes its property of that name (for an array or map: the method, bound to it)
+    OP_MAP,            // operand: a 2-byte entry count N. Pops 2N values laid out key, value, key, value, ... (keys are strings), builds a map from them (a repeated key keeps the LAST value), pushes it
 };
