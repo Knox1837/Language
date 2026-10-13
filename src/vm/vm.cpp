@@ -3,6 +3,7 @@
 #include "compiler.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
+#include "vm_class.h"
 #include "vm_map.h"
 #include "vm_map_lib.h"
 #include "vm_native.h"
@@ -124,6 +125,29 @@ bool VM::callValue(const VMValue& callee, int argCount) {
         // Natives have no CallFrame: drop the arguments and the callee, then leave the result where the call expression's value belongs.
         stack.resize(stack.size() - argCount - 1);
         push(std::move(result));
+        return true;
+    }
+    if (isVMBoundMethod(callee)) {
+        auto bound = asVMBoundMethod(callee); // copy first: `callee` refers to the very stack slot overwritten on the next line
+        // A method's slot 0 holds its receiver instead of the callee (the compiler names that slot `this`), so put the receiver there and call the plain closure.
+        stack[stack.size() - argCount - 1] = bound->receiver;
+        return call(bound->method, argCount);
+    }
+    if (isVMClass(callee)) {
+        auto klass = asVMClass(callee); // copy first, as above
+        auto instance = std::make_shared<VMInstance>(klass);
+        // The new instance takes the class's place on the stack. If there is an init(), it runs as a normal method call with the instance as `this`, and its compiled return hands the instance back as the call's value. With no init() there is nothing to run: the instance already sits where the call's value belongs.
+        stack[stack.size() - argCount - 1] = VMValue{instance};
+        auto initializer = klass->findMethod("init");
+        if (initializer) {
+            return call(initializer, argCount);
+        }
+        if (argCount != 0) {
+            std::ostringstream msg;
+            msg << "Expected 0 arguments but got " << argCount << ".";
+            runtimeError(msg.str());
+            return false;
+        }
         return true;
     }
     runtimeError("Can only call functions.");
@@ -484,6 +508,22 @@ InterpretResult VM::run() {
             case OpCode::OP_GET_PROPERTY: {
                 std::string name = asVMString(readConstant()); // copy: readConstant() returns a temporary
                 VMValue object = pop();
+                if (isVMInstance(object)) {
+                    auto instance = asVMInstance(object);
+                    // A field shadows a method of the same name, like the tree-walker's LoxInstance::get.
+                    auto field = instance->fields.find(name);
+                    if (field != instance->fields.end()) {
+                        push(field->second);
+                        break;
+                    }
+                    auto method = instance->klass->findMethod(name);
+                    if (!method) {
+                        runtimeError("Undefined property '" + name + "'.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(VMValue{std::make_shared<VMBoundMethod>(object, method)});
+                    break;
+                }
                 if (isVMArray(object)) {
                     VMValue method;
                     if (!getVMArrayMethod(asVMArray(object), name, method)) {
@@ -504,6 +544,65 @@ InterpretResult VM::run() {
                 }
                 runtimeError("Only instances, arrays, maps, and modules have properties.");
                 return InterpretResult::RUNTIME_ERROR;
+            }
+            case OpCode::OP_CLASS: {
+                std::string name = asVMString(readConstant());
+                push(VMValue{std::make_shared<VMClass>(name)});
+                break;
+            }
+            case OpCode::OP_INHERIT: {
+                // [.. superclass subclass]
+                if (!isVMClass(peekStack(1))) {
+                    runtimeError("Superclass must be a class.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                asVMClass(peekStack(0))->superclass = asVMClass(peekStack(1));
+                pop(); // the subclass; the superclass stays on the stack as the hidden local `super`
+                break;
+            }
+            case OpCode::OP_METHOD: {
+                std::string name = asVMString(readConstant());
+                // [.. class closure]
+                asVMClass(peekStack(1))->methods[name] = asVMClosure(peekStack(0));
+                pop();
+                break;
+            }
+            case OpCode::OP_GET_SUPER: {
+                std::string name = asVMString(readConstant());
+                VMValue superclass = pop();
+                VMValue instance = pop();
+                // `super` is only ever a class here: OP_INHERIT already rejected anything else when the class was declared.
+                auto method = asVMClass(superclass)->findMethod(name);
+                if (!method) {
+                    runtimeError("Undefined property '" + name + "'.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                push(VMValue{std::make_shared<VMBoundMethod>(instance, method)});
+                break;
+            }
+            case OpCode::OP_CHECK_FIELDS: {
+                if (!isVMInstance(peekStack(0))) {
+                    runtimeError("Only instances have fields.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                break;
+            }
+            case OpCode::OP_SET_PROPERTY: {
+                std::string name = asVMString(readConstant());
+                VMValue value = pop();
+                VMValue object = pop();
+                if (!isVMInstance(object)) { // the compiler already emitted OP_CHECK_FIELDS, but this keeps the opcode safe on its own
+                    runtimeError("Only instances have fields.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                asVMInstance(object)->fields[name] = value; // creates the field on first assignment
+                push(value);
+                break;
+            }
+            case OpCode::OP_DUP: {
+                VMValue top = peekStack(0); // copy first: push() may reallocate the stack
+                push(top);
+                break;
             }
             case OpCode::OP_RETURN: {
                 VMValue result = pop();

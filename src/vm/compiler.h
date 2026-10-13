@@ -20,6 +20,9 @@ struct UpvalueInfo {
     bool isLocal;
 };
 
+// What kind of function body is being compiled. A METHOD or INITIALIZER has the receiver (`this`) in slot 0 instead of its own closure, and an INITIALIZER always returns it.
+enum class FunctionType { SCRIPT, FUNCTION, METHOD, INITIALIZER };
+
 // Compile-time state for ONE function currently being compiled (the top-level script is FunctionState #0). 
 // Kept on a stack in Compiler so entering a nested function declaration is just push-a-new-one, compile its body, pop back to the enclosing state.
 struct FunctionState {
@@ -28,6 +31,7 @@ struct FunctionState {
     std::vector<UpvalueInfo> upvalues;
     int scopeDepth = 0;
     bool reportedConstantOverflow = false; // so a function that runs out of constants gets ONE error message, not one per extra constant
+    FunctionType type = FunctionType::SCRIPT;
 };
 
 class Compiler {
@@ -41,6 +45,9 @@ private:
     bool hadError = false;
 
     std::vector<FunctionState> functionStack;
+
+    // One entry per class declaration currently being compiled (innermost last); the flag says whether that class has a superclass.
+    std::vector<bool> classStack;
     FunctionState& current_() { return functionStack.back(); } // the function currently being compiled into
     Chunk& currentChunk() { return current_().function->chunk; }
 
@@ -74,7 +81,10 @@ private:
     void declaration();
     void varDeclaration();
     void functionDeclaration();
-    void functionBody(const std::string& name); // parses "(" params ")" "{" body "}" into a NEW FunctionState
+    void classDeclaration();
+    void method();      // one method inside a class body: name "(" params ")" "{" body "}", then OP_METHOD
+    void functionBody(const std::string& name, FunctionType type = FunctionType::FUNCTION, const std::string& kind = "function"); // parses "(" params ")" "{" body "}" into a NEW FunctionState; `kind` only words the error messages
+    void emitReturn();  // the implicit return at the end of a body: `this` for an initializer, nil for everything else
     void statement();
     void printStatement();
     void returnStatement();
@@ -108,6 +118,9 @@ private:
     void unary(bool canAssign);
     void binary(bool canAssign);
     void variable(bool canAssign);
+    void namedVariable(const Token& name, bool canAssign); // variable() for an explicit token, so `this` and `super` can reuse the local/upvalue/global resolution
+    void thisExpr(bool canAssign);   // the prefix `this`
+    void superExpr(bool canAssign);  // the prefix `super`, which must be followed by ".method"
     void and_(bool canAssign);
     void or_(bool canAssign);
     void call(bool canAssign);       // the infix "(" that turns a primary expression into a function call

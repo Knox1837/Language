@@ -13,6 +13,7 @@ std::shared_ptr<VMFunction> Compiler::compile(const std::string& source) {
     current = 0;
     hadError = false;
     functionStack.clear();
+    classStack.clear();
 
     // The top-level script is treated as a function too (name "<script>", arity 0) 
     // This is what lets the VM push it onto the same call-frame stack as any real function, uniformly, rather than needing separate "top-level vs. inside a call" execution code.
@@ -38,6 +39,8 @@ std::shared_ptr<VMFunction> Compiler::compile(const std::string& source) {
 void Compiler::declaration() {
     if (match(TokenType::DEF)) {
         functionDeclaration();
+    } else if (match(TokenType::CLASS)) {
+        classDeclaration();
     } else if (match(TokenType::VAR)) {
         varDeclaration();
     } else {
@@ -56,22 +59,23 @@ void Compiler::functionDeclaration() {
     }
     uint8_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
-    functionBody(nameToken.lexeme);
+    functionBody(nameToken.lexeme, FunctionType::FUNCTION, "function");
 
     defineVariable(globalConstant);
 }
 
-void Compiler::functionBody(const std::string& name) {
+void Compiler::functionBody(const std::string& name, FunctionType type, const std::string& kind) {
     auto function = std::make_shared<VMFunction>();
     function->name = name;
     functionStack.push_back(FunctionState{function, {}, {}, 0});
-
+    functionStack.back().type = type;
     // Same slot-0 reservation as the top-level script
-    functionStack.back().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, "", 0), 0});
+    bool isMethod = (type == FunctionType::METHOD || type == FunctionType::INITIALIZER);
+    functionStack.back().locals.push_back(LocalVar{isMethod ? Token(TokenType::THIS, "this", 0) : Token(TokenType::IDENTIFIER, "", 0), 0});
 
     beginScope();
 
-    consume(TokenType::LEFT_PAREN, "Expect '(' after function name.");
+    consume(TokenType::LEFT_PAREN, "Expect '(' after " + kind + " name.");
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             function->arity++;
@@ -86,11 +90,10 @@ void Compiler::functionBody(const std::string& name) {
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
 
-    consume(TokenType::LEFT_BRACE, "Expect '{' before function body.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before " + kind + " body.");
     block();
 
-    emitByte(OpCode::OP_NIL); // implicit "return nil;" if the body falls off the end without an explicit return
-    emitByte(OpCode::OP_RETURN);
+    emitReturn(); // implicit return if the body falls off the end without an explicit one: nil, or `this` for an initializer
 
     // Capture the finished function's upvalue list BEFORE popping its FunctionState (which owns that list)
     function->upvalueCount = static_cast<int>(current_().upvalues.size());
@@ -107,6 +110,72 @@ void Compiler::functionBody(const std::string& name) {
         emitByte(upvalue.isLocal ? 1 : 0);
         emitByte(upvalue.index);
     }
+}
+
+void Compiler::emitReturn() {
+    if (current_().type == FunctionType::INITIALIZER) {
+        emitByte(OpCode::OP_GET_LOCAL); // an initializer always returns the instance it was called on, which sits in slot 0
+        emitByte(static_cast<uint8_t>(0));
+    } else {
+        emitByte(OpCode::OP_NIL);
+    }
+    emitByte(OpCode::OP_RETURN);
+}
+
+void Compiler::classDeclaration() {
+    consume(TokenType::IDENTIFIER, "Expect class name.");
+    Token className = previous();
+    uint8_t nameConstant = identifierConstant(className);
+    declareVariable(className);
+
+    emitByte(OpCode::OP_CLASS);
+    emitByte(nameConstant);
+    // Defined BEFORE the body is compiled, so methods can refer to their own class by name (for a global that's a global lookup at call time; for a local it's an upvalue).
+    defineVariable(nameConstant);
+
+    classStack.push_back(false);
+
+    if (match(TokenType::LESS)) {
+        consume(TokenType::IDENTIFIER, "Expect superclass name.");
+        Token superName = previous();
+        variable(false); // pushes the superclass value
+        if (superName.lexeme == className.lexeme) {
+            errorAt(superName, "A class can't inherit from itself.");
+        }
+        beginScope();
+        current_().locals.push_back(LocalVar{Token(TokenType::SUPER, "super", superName.line), -1});
+        markInitialized();
+
+        namedVariable(className, false); // [.. superclass subclass]
+        emitByte(OpCode::OP_INHERIT);    // checks and links, then pops the subclass: [.. superclass]
+        classStack.back() = true;
+    }
+
+    namedVariable(className, false); // the class itself, kept on the stack while the methods are attached to it
+    consume(TokenType::LEFT_BRACE, "Expect '{' before class body.");
+    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+        method();
+    }
+    consume(TokenType::RIGHT_BRACE, "Expect '}' after class body.");
+    emitByte(OpCode::OP_POP); // the class
+
+    if (classStack.back()) {
+        endScope(); // discards (or closes, if a method captured it) the hidden `super` local
+    }
+    classStack.pop_back();
+}
+
+void Compiler::method() {
+    consume(TokenType::IDENTIFIER, "Expect method name.");
+    Token name = previous();
+    uint8_t nameConstant = identifierConstant(name);
+
+    // Like the tree-walker, a method named "init" is the initializer, whatever else is going on.
+    FunctionType type = (name.lexeme == "init") ? FunctionType::INITIALIZER : FunctionType::METHOD;
+    functionBody(name.lexeme, type, "method"); // leaves the new closure on the stack
+
+    emitByte(OpCode::OP_METHOD);
+    emitByte(nameConstant);
 }
 
 void Compiler::varDeclaration() {
@@ -273,6 +342,17 @@ void Compiler::printStatement() {
 }
 
 void Compiler::returnStatement() {
+    if (current_().type == FunctionType::INITIALIZER) {
+        // Like the tree-walker, an initializer's return value is ignored: it always returns `this`. A returned expression is still EVALUATED (for its side effects) and then discarded.
+        if (!match(TokenType::SEMICOLON)) {
+            expression();
+            consume(TokenType::SEMICOLON, "Expect ';' after return value.");
+            emitByte(OpCode::OP_POP);
+        }
+        emitReturn();
+        return;
+    }
+
     if (match(TokenType::SEMICOLON)) {
         // Bare "return;" -> nil, matching the tree-walker's ReturnStmt
         // with no value expression.
@@ -512,7 +592,10 @@ void Compiler::or_(bool) {
 }
 
 void Compiler::variable(bool canAssign) {
-    Token name = previous();
+    namedVariable(previous(), canAssign);
+}
+
+void Compiler::namedVariable(const Token& name, bool canAssign) {
     int localSlot = resolveLocal(current_(), name);
 
     OpCode getOp, setOp;
@@ -558,6 +641,32 @@ void Compiler::call(bool) {
     uint8_t argCount = argumentList();
     emitByte(OpCode::OP_CALL);
     emitByte(argCount);
+}
+
+void Compiler::thisExpr(bool) {
+    if (classStack.empty()) {
+        // The tree-walker only finds this out at run time ("Undefined variable 'this'."); the VM can tell from the source text alone.
+        errorAt(previous(), "Can't use 'this' outside of a class.");
+        return;
+    }
+    namedVariable(previous(), false); // `this` is simply local slot 0 of the enclosing method (or an upvalue of it, from a nested function)
+}
+
+void Compiler::superExpr(bool) {
+    Token keyword = previous();
+    if (classStack.empty()) {
+        errorAt(keyword, "Can't use 'super' outside of a class.");
+    } else if (!classStack.back()) {
+        errorAt(keyword, "Can't use 'super' in a class with no superclass.");
+    }
+    consume(TokenType::DOT, "Expect '.' after 'super'.");
+    consume(TokenType::IDENTIFIER, "Expect superclass method name.");
+    uint8_t nameConstant = identifierConstant(previous());
+
+    namedVariable(Token(TokenType::THIS, "this", keyword.line), false);   // the receiver ...
+    namedVariable(Token(TokenType::SUPER, "super", keyword.line), false); // ... and the superclass of the class this code was written in
+    emitByte(OpCode::OP_GET_SUPER);
+    emitByte(nameConstant);
 }
 
 uint8_t Compiler::argumentList() {
@@ -636,11 +745,32 @@ void Compiler::index(bool canAssign) {
     }
 }
 
-void Compiler::dot(bool) {
-    // Property READS only for now (arr.push, then usually called). Assigning through a dot (a.x = 1) is deliberately not handled here: it falls through to the "Invalid assignment target." check in parsePrecedence until classes give it a meaning.
+void Compiler::dot(bool canAssign) {
     consume(TokenType::IDENTIFIER, "Expect property name after '.'.");
-    emitByte(OpCode::OP_GET_PROPERTY);
-    emitByte(identifierConstant(previous()));
+    uint8_t nameConstant = identifierConstant(previous());
+
+    OpCode compoundOp = OpCode::OP_ADD; // only meaningful when compoundAssignOp() returns true below
+    if (canAssign && match(TokenType::EQUAL)) {
+        // The tree-walker checks that the object can hold fields BEFORE evaluating the right side, so a bad target must fail before the right side's side effects.
+        emitByte(OpCode::OP_CHECK_FIELDS);
+        expression();
+        emitByte(OpCode::OP_SET_PROPERTY);
+        emitByte(nameConstant);
+    } else if (canAssign && compoundAssignOp(peek().type, compoundOp)) {
+        // "obj.x op= v": like a[i] += v, the object must be evaluated ONCE, so duplicate it instead of naming it twice.
+        advance();
+        emitByte(OpCode::OP_CHECK_FIELDS);
+        emitByte(OpCode::OP_DUP);          // [obj]      -> [obj obj]
+        emitByte(OpCode::OP_GET_PROPERTY); // [obj obj]  -> [obj current]
+        emitByte(nameConstant);
+        expression();                      //            -> [obj current v]
+        emitByte(compoundOp);              //            -> [obj result]
+        emitByte(OpCode::OP_SET_PROPERTY); //            -> [result]
+        emitByte(nameConstant);
+    } else {
+        emitByte(OpCode::OP_GET_PROPERTY);
+        emitByte(nameConstant);
+    }
 }
 
 uint8_t Compiler::identifierConstant(const Token& name) {
@@ -680,6 +810,8 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule bracketRule    = { &Compiler::arrayLiteral, &Compiler::index,  Precedence::CALL }; // '[' starts an array literal in prefix position and an index in infix position
     static const ParseRule dotRule        = { nullptr,                 &Compiler::dot,    Precedence::CALL };
     static const ParseRule braceRule      = { &Compiler::mapLiteral,   nullptr,           Precedence::NONE }; // prefix only: a map literal
+    static const ParseRule thisRule       = { &Compiler::thisExpr,     nullptr,           Precedence::NONE };
+    static const ParseRule superRule      = { &Compiler::superExpr,    nullptr,           Precedence::NONE };
     static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
     switch (type) {
@@ -692,6 +824,8 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::LEFT_PAREN:     return parenRule;
         case TokenType::LEFT_BRACKET:   return bracketRule;
         case TokenType::LEFT_BRACE:     return braceRule;
+        case TokenType::THIS:           return thisRule;
+        case TokenType::SUPER:          return superRule;
         case TokenType::DOT:            return dotRule;
         case TokenType::MINUS:          return minusRule;
         case TokenType::PLUS:           return termRule;
@@ -755,7 +889,8 @@ void Compiler::errorAt(const Token& token, const std::string& message) {
 // bytecode emission
 
 int Compiler::currentLine() const {
-    // previous() is the token most recently consumed attributing emitted bytecode to it gives reasonable line numbers for errors.
+    // previous() is the token most recently consumed — attributing
+    // emitted bytecode to it gives reasonable line numbers for errors.
     return current > 0 ? tokens[current - 1].line : 0;
 }
 

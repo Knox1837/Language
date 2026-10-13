@@ -2,6 +2,7 @@
 #include "vm_stdlib.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
+#include "vm_class.h"
 #include "vm_map.h"
 #include "vm_map_lib.h"
 #include "vm_native.h"
@@ -31,6 +32,9 @@ static std::string stringifyImpl(const VMValue& value, std::vector<const void*>&
     if (isVMClosure(value)) return "<fn " + asVMClosure(value)->function->name + ">";
     if (isVMFunction(value)) return "<fn " + asVMFunction(value)->name + ">";
     if (isVMNative(value)) return "<native fn " + asVMNative(value)->name + ">";
+    if (isVMClass(value)) return "<class " + asVMClass(value)->name + ">";
+    if (isVMInstance(value)) return "<instance of " + asVMInstance(value)->klass->name + ">";
+    if (isVMBoundMethod(value)) return "<fn " + asVMBoundMethod(value)->method->function->name + ">"; // a bound method prints like the plain function, as in the tree-walker
     if (isVMArray(value)) {
         auto array = asVMArray(value);
         if (std::find(visiting.begin(), visiting.end(), array.get()) != visiting.end()) return "[...]";
@@ -427,7 +431,7 @@ static void registerType(Globals& globals) {
 
     // Covers both user functions (closures) and native functions, like the tree-walker's isFunction (which accepts any Callable).
     define(globals, "isFunction", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
-        result = isVMClosure(args[0]) || isVMNative(args[0]);
+        result = isVMClosure(args[0]) || isVMNative(args[0]) || isVMClass(args[0]) || isVMBoundMethod(args[0]);
         return true;
     });
 }
