@@ -9,12 +9,16 @@ class VMClosure;   // vm_closure.h
 class VMNative;    // vm_native.h
 class VMArray;     // vm_array.h
 class VMMap;       // vm_map.h
+class VMClass;     // vm_class.h
+class VMInstance;  // vm_class.h
+class VMBoundMethod; // vm_class.h
 // Both forward declared to break a circular include: they each need a Chunk, and Chunk's constant pool needs to hold VMValue.
 
 using VMValue = std::variant<std::monostate, double, bool, std::string,
                               std::shared_ptr<VMFunction>, std::shared_ptr<VMClosure>,
                               std::shared_ptr<VMNative>, std::shared_ptr<VMArray>,
-                              std::shared_ptr<VMMap>>;
+                              std::shared_ptr<VMMap>, std::shared_ptr<VMClass>, std::shared_ptr<VMInstance>,
+                              std::shared_ptr<VMBoundMethod>>;
 
 inline bool isVMNumber(const VMValue& v) { return std::holds_alternative<double>(v); }
 inline bool isVMBool(const VMValue& v) { return std::holds_alternative<bool>(v); }
@@ -25,6 +29,9 @@ inline bool isVMClosure(const VMValue& v) { return std::holds_alternative<std::s
 inline bool isVMNative(const VMValue& v) { return std::holds_alternative<std::shared_ptr<VMNative>>(v); }
 inline bool isVMArray(const VMValue& v) { return std::holds_alternative<std::shared_ptr<VMArray>>(v); }
 inline bool isVMMap(const VMValue& v) { return std::holds_alternative<std::shared_ptr<VMMap>>(v); }
+inline bool isVMClass(const VMValue& v) { return std::holds_alternative<std::shared_ptr<VMClass>>(v); }
+inline bool isVMInstance(const VMValue& v) { return std::holds_alternative<std::shared_ptr<VMInstance>>(v); }
+inline bool isVMBoundMethod(const VMValue& v) { return std::holds_alternative<std::shared_ptr<VMBoundMethod>>(v); }
 
 inline double asVMNumber(const VMValue& v) { return std::get<double>(v); }
 inline bool asVMBool(const VMValue& v) { return std::get<bool>(v); }
@@ -34,6 +41,9 @@ inline std::shared_ptr<VMClosure> asVMClosure(const VMValue& v) { return std::ge
 inline std::shared_ptr<VMNative> asVMNative(const VMValue& v) { return std::get<std::shared_ptr<VMNative>>(v); }
 inline std::shared_ptr<VMArray> asVMArray(const VMValue& v) { return std::get<std::shared_ptr<VMArray>>(v); }
 inline std::shared_ptr<VMMap> asVMMap(const VMValue& v) { return std::get<std::shared_ptr<VMMap>>(v); }
+inline std::shared_ptr<VMClass> asVMClass(const VMValue& v) { return std::get<std::shared_ptr<VMClass>>(v); }
+inline std::shared_ptr<VMInstance> asVMInstance(const VMValue& v) { return std::get<std::shared_ptr<VMInstance>>(v); }
+inline std::shared_ptr<VMBoundMethod> asVMBoundMethod(const VMValue& v) { return std::get<std::shared_ptr<VMBoundMethod>>(v); }
 
 // Truthiness, matching the tree-walker's rule exactly: only nil and false are falsey; everything else (including 0 and "") is truthy.
 inline bool isVMTruthy(const VMValue& v) {

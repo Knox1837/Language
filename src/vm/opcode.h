@@ -51,6 +51,13 @@ enum class OpCode : uint8_t {
     OP_GET_INDEX,      // pop index, pop object, push object[index]: an array (numeric index, must be in range) or a map (string key, must exist)
     OP_SET_INDEX,      // pop value, pop index, pop object, store object[index] = value, then push the VALUE back (assignment is an expression). On a map this also INSERTS a new key
     OP_DUP2,           // duplicate the top TWO values: [.. a b] becomes [.. a b a b]. Used by compound assignment to a[i] so that `a` and `i` are evaluated ONCE
-    OP_GET_PROPERTY,   // operand: constant-pool index of a name. Pops an object, pushes its property of that name (for an array or map: the method, bound to it)
+    OP_GET_PROPERTY,   // operand: constant-pool index of a name. Pops an object, pushes its property of that name: an instance's field (else its method, bound to it), or an array's/map's method bound to it
+    OP_CLASS,          // operand: constant-pool index of the class name. Pushes a new, empty class with that name
+    OP_INHERIT,        // stack [.. superclass subclass]: errors unless the superclass really is a class, links subclass -> superclass, then pops the SUBCLASS (the superclass stays, as the hidden local `super`)
+    OP_METHOD,         // operand: constant-pool index of the method name. Stack [.. class closure]: stores the closure as that method of the class and pops it
+    OP_GET_SUPER,      // operand: constant-pool index of a method name. Stack [.. this superclass]: pops both, pushes the superclass's method of that name bound to `this`
+    OP_SET_PROPERTY,   // operand: constant-pool index of a field name. Stack [.. instance value]: sets (or creates) the field, pops both, pushes the VALUE back (assignment is an expression)
+    OP_CHECK_FIELDS,   // PEEKS the top of the stack and errors unless it is an instance. Emitted before the right side of `obj.x = v` / `obj.x += v`, so a bad target fails BEFORE the right side runs, like the tree-walker
+    OP_DUP,            // duplicate the top value: [.. a] becomes [.. a a]. Used by `obj.x += v` so `obj` is evaluated ONCE
     OP_MAP,            // operand: a 2-byte entry count N. Pops 2N values laid out key, value, key, value, ... (keys are strings), builds a map from them (a repeated key keeps the LAST value), pushes it
 };
