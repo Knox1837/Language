@@ -74,14 +74,20 @@ syntax (`m.keys()`, `m.hasKey("a")`), and the same operations as plain
 functions (`keys(m)`). Entries print and iterate in sorted key order.
 See "Design note: maps" below.
 
-Not yet implemented (in rough build order): classes/inheritance,
-imports, and a real garbage collector — closures, arrays and maps make
-this considerably more relevant than before, since `shared_ptr`
-reference counting cannot detect or collect a REFERENCE CYCLE (a closure
-that captures a variable which ends up holding that same closure, or
-simply `push(a, a)` or `m["self"] = m`); this remains a known, deferred
-limitation rather than a correctness bug affecting any ordinary program
-shape. See "Known limits" below for the rest.
+**Classes** work too: `class Name < Super { ... }`, instances created by
+calling the class (running `init` if there is one), fields created on
+assignment (`obj.x = 1`, `obj.x += 1`), methods that use `this`, bound
+methods that remember their instance (`var f = obj.method`), single
+inheritance, and `super.method()`. See "Design note: classes" below.
+
+Not yet implemented (in rough build order): imports, and a real garbage
+collector — closures, arrays, maps and instances make this considerably
+more relevant than before, since `shared_ptr` reference counting cannot
+detect or collect a REFERENCE CYCLE (a closure that captures a variable
+which ends up holding that same closure, `push(a, a)`, `m["self"] = m`,
+or `obj.me = obj`); this remains a known, deferred limitation rather
+than a correctness bug affecting any ordinary program shape. See "Known
+limits" and "Known differences from the tree-walker" below.
 
 ## Architecture
 
@@ -91,13 +97,14 @@ shape. See "Known limits" below for the rest.
 - **`vm_value.h`** — the VM's own value type, deliberately SEPARATE from
   the tree-walker's `Value` (`src/interpreter/value.h`). A
   `std::variant` of nil / number / bool / string / `VMFunction` /
-  `VMClosure` / `VMNative` / `VMArray` / `VMMap`. Strings back both
+  `VMClosure` / `VMNative` / `VMArray` / `VMMap` / `VMClass` /
+  `VMInstance` / `VMBoundMethod`. Strings back both
   variable-name constants and real string literals. `VMFunction` only
   ever appears in a chunk's constant pool (compiled code); the runtime
-  callable is the closure. The type will keep growing as more types are
-  added (instances next), rather than adopting the tree-walker's
-  `Value` wholesale (which would drag in `Callable`/`LoxInstance`/etc.
-  before the VM has any use for them). Nothing uses `std::visit` on it: values
+  callable is the closure. The type grew one case at a time as the VM
+  needed it, rather than adopting the tree-walker's `Value` wholesale
+  (which would have dragged in `Callable`/`LoxInstance`/etc. before the
+  VM had any use for them). Nothing uses `std::visit` on it: values
   are inspected through the `isVM*`/`asVM*` helpers, so adding an
   alternative does not break existing code.
 - **`vm_function.h`** — a compiled function: its own `Chunk`, `arity`,
@@ -113,6 +120,9 @@ shape. See "Known limits" below for the rest.
   shared by reference.
 - **`vm_map_lib.h`/`.cpp`** — the map operations, written once and
   exposed both as free functions and as bound methods.
+- **`vm_class.h`** — `VMClass` (name, superclass, method table),
+  `VMInstance` (class + field table) and `VMBoundMethod` (a method plus
+  the instance it was read from).
 - **`vm_stdlib.h`/`.cpp`** — the native functions themselves, grouped
   like the tree-walker's libs (math, string, type, io), plus
   `stringifyVMValue()`, the formatter shared by `print` and `str()`.
@@ -251,7 +261,9 @@ available for a user's first real local/parameter. This has to be
 consistent between the compiler (which assigns compile-time slot
 numbers to locals) and the VM (which lays out the runtime stack) or
 they silently disagree about what's in slot 0 — see the bug below,
-which is exactly that disagreement.
+which is exactly that disagreement. (Classes later reuse the same
+reserved slot: in a METHOD it holds the receiver, `this`, instead of the
+closure. See "Design note: classes".)
 
 Recursion works with no special-casing: a global function's name is
 resolved by NAME at CALL time (`OP_GET_GLOBAL`), and by the time a
@@ -466,13 +478,13 @@ of `parsePrecedence`. As with `=`, the VM compiler has no panic mode,
 so the same mistake also prints a follow-on "Expect ';'" error.
 
 For a plain variable, naming the target twice (once to read it, once to
-write it) is harmless. Array elements and map entries are different:
-`a[i] += v` must evaluate `a` and `i` ONCE (`a[next()] += 1` must call
-`next()` once), which is why the tree-walker has dedicated
+write it) is harmless. Array elements, map entries and instance fields
+are different: `a[i] += v` must evaluate `a` and `i` ONCE (`a[next()] +=
+1` must call `next()` once), which is why the tree-walker has dedicated
 `CompoundIndexSet`/`CompoundSet` nodes. The VM solves it with a stack
-trick instead of new nodes, shared by arrays and maps: see "Design note:
-arrays". Instance fields will need their own variant when classes
-arrive.
+trick instead of new nodes: `OP_DUP2` for elements and entries (see
+"Design note: arrays") and `OP_DUP` for fields (see "Design note:
+classes").
 
 ## Design note: arrays
 
@@ -518,9 +530,8 @@ so `a.push == a.push` is `false`; an `OP_INVOKE` that fuses the lookup
 and the call would avoid the allocation, and is deferred until it
 matters. A missing method is an error at the access ("Undefined array
 method 'x'."), before any call. Assigning through a dot (`a.x = 1`,
-`a.x += 1`) is a COMPILE error ("Invalid assignment target.") for now,
-where the tree-walker reports the runtime error "Only instances have
-fields."; that changes when classes give it a meaning.
+`a.x += 1`) is the runtime error "Only instances have fields.", as in
+the tree-walker (it was a compile error before classes existed).
 
 **One implementation, two forms.** `vm_array_lib.cpp` holds each
 operation once, taking the array plus the arguments after it. The free
@@ -580,8 +591,8 @@ error ("Undefined map key") rather than a way to create the key.
 (`keys values hasKey remove length`), never an entry: `m.a` is
 "Undefined map method 'a'." even when the key `"a"` exists. Entries are
 reached with `m["a"]`. Method access builds a bound native exactly like
-arrays do (`var k = m.keys; k()`), and `m.x = 1` is the same compile
-error as on arrays until classes arrive.
+arrays do (`var k = m.keys; k()`), and `m.x = 1` is the runtime error
+"Only instances have fields.", the same as on arrays.
 
 **One implementation, two forms.** `vm_map_lib.cpp` mirrors
 `vm_array_lib.cpp`: `keys(m)`/`m.keys()`, `values`,
@@ -599,6 +610,92 @@ top-level values (so strings appear without quotes), entries in key
 order. A map that contains itself prints `{...}` at the repeat, using
 the same guard as the array `[...]`, so arrays and maps nested in each
 other in a cycle terminate too.
+
+## Design note: classes
+
+**Objects.** `vm_class.h` holds three small types, each behind a
+`shared_ptr` in the value variant: `VMClass` (name, optional
+superclass, a table of method closures), `VMInstance` (its class plus a
+table of fields) and `VMBoundMethod` (a method closure plus the
+instance it was read from). As with arrays and maps they have
+REFERENCE semantics: `==` compares identity, and they are always
+truthy. They print as `<class Name>`, `<instance of Name>` and, for a
+bound method, like the plain function it came from (`<fn name>`).
+`isFunction` is true for classes and bound methods as well as for
+functions, because the tree-walker treats every Callable alike.
+
+**Declaring a class.** `class A < B { ... }` compiles to `OP_CLASS "A"`
+(a new, empty class) and the usual variable definition, then, if there
+is a superclass, a push of `B` and `OP_INHERIT`; then the class is
+pushed again and each method is an `OP_CLOSURE` followed by `OP_METHOD
+"name"`, and a final pop. The class name is defined BEFORE the body is
+compiled, so methods can mention their own class. Methods are compiled
+by the same code as functions (same upvalue machinery), as a METHOD or,
+when named `init`, an INITIALIZER.
+
+**Slot 0 holds the receiver.** The compiler reserves slot 0 of every
+function for the callee (see "call frames and stack-slot 0"). Methods
+reuse that reservation: for a METHOD or INITIALIZER the slot is NAMED
+`this`, and the call puts the instance there instead of the closure. So
+`this` is just a local variable, and a function nested inside a method
+captures it through the existing upvalue mechanism. That is how
+`getter() { def inner() { return this.v; } return inner; }` keeps
+working after `getter` has returned, and why closing captured variables
+on `OP_RETURN` (see the bug note above) matters for classes too.
+
+**Calling.** `OP_CALL` on a class replaces the class in its stack slot
+with a fresh instance. If the class or an ancestor has an `init`, it
+runs as an ordinary call whose slot 0 is that instance; with none there
+is nothing to run, and the instance already sits where the call's value
+belongs (a non-zero argument count is then "Expected 0 arguments but
+got N."). Calling a bound method puts its receiver in the slot and runs
+the plain closure. A class's arity is its `init`'s, found through the
+inheritance chain, and arity errors use the usual "Expected N arguments
+but got M." wording.
+
+**Initializers.** In an `init`, falling off the end, `return;` and
+`return expr;` all return `this` (slot 0). Like the tree-walker, a
+returned expression is still EVALUATED, for its side effects, and then
+discarded; some languages reject it. Calling `obj.init(...)` again is
+allowed and returns the instance.
+
+**Properties.** `OP_GET_PROPERTY` on an instance checks its fields
+first and then the class chain; a method found there is bound to the
+instance on the spot. So a field shadows a method of the same name
+(`this.get = ...` hides `get()`), and `var f = obj.method; f()` keeps
+its `this`. A missing name is "Undefined property 'x'.". Assignment is
+`OP_SET_PROPERTY`, which creates the field on first assignment (there is
+no declared field list). The tree-walker checks the target BEFORE
+evaluating the right side, so the compiler emits `OP_CHECK_FIELDS`
+first: `n.x = f()` on a non-instance fails with "Only instances have
+fields." without calling `f`. `obj.x += v` uses `OP_DUP` so that `obj`
+is evaluated once (`get().n += 1` calls `get()` once), the same idea as
+`OP_DUP2` for `a[i] += v`. Each property read allocates a new bound
+method, so `a.m == a.m` is `false`; an `OP_INVOKE` that fuses lookup and
+call would avoid the allocation, and is deferred until it matters.
+
+**Inheritance and `super`.** `OP_INHERIT` checks that the superclass
+really is a class ("Superclass must be a class.") and links the two.
+Method lookup then walks the chain at run time, like the tree-walker's
+`findMethod`, so nothing is copied down. For `super`, the superclass
+value left on the stack by the class declaration becomes a hidden LOCAL
+named `super` that lives for the whole class body, and methods that
+mention `super` capture it as an upvalue like any other variable. That
+is what makes `super` mean "the superclass of the class this method was
+WRITTEN in", not "of the receiver's class": with `class B < A` and
+`class C < B`, calling `C().test()` where `test` is defined in `B` and
+does `super.name()` reaches `A`'s `name`, although the receiver is a
+`C`. `super.name` compiles to: push `this`, push `super`,
+`OP_GET_SUPER`, which looks the method up starting at the superclass
+and binds it to `this`.
+
+**Checks made at compile time.** `this` is legal only lexically inside
+a class body (functions nested in its methods count), and `super` also
+needs a superclass: "Can't use 'this' outside of a class.", "Can't use
+'super' outside of a class.", "Can't use 'super' in a class with no
+superclass.", and "A class can't inherit from itself.". The tree-walker
+has no such checks; it finds out at run time ("Undefined variable
+'this'."). See "Known differences from the tree-walker".
 
 ## Known limits
 
@@ -621,15 +718,52 @@ other in a cycle terminate too.
 - **Jumps are 16-bit** (65535 bytes), as are array and map literal
   sizes.
 - **No garbage collector.** Reference cycles leak: a closure that
-  captures a variable holding itself, or an array or map that contains
-  itself (`push(a, a)`, `m["self"] = m`). Plain arrays, maps and
-  closures are freed normally.
+  captures a variable holding itself; an array or map that contains
+  itself (`push(a, a)`, `m["self"] = m`); an instance that holds itself
+  or one of its own bound methods (`obj.me = obj`, `obj.cb = obj.m`);
+  and a class declared INSIDE a function whose methods name that class
+  (the class owns the method, which owns an upvalue back to the class;
+  a global class naming itself is a global lookup and does not leak).
+  Plain arrays, maps, instances and closures are freed normally.
 - **Very deep nesting overflows the C++ stack.** Printing, and
   eventually freeing, a nested array or map recurses once per level.
   Measured for arrays on an optimized build with an 8 MB stack: printing
   worked at 10,000 levels and crashed at 50,000; building and freeing
   worked at 100,000 and crashed at 400,000. Windows' default 1 MB stack
   allows roughly an eighth as much. The tree-walker has the same limit.
+
+## Known differences from the tree-walker
+
+For valid, deterministic programs the two engines print the same output;
+the tests compare them line by line. What still differs:
+
+- **Errors found at compile time instead of run time:** misuse of
+  `this` or `super`, `class A < A`, and reading a local in its own
+  initializer. The last is the one place the VM rejects a program the
+  tree-walker accepts: in `{ var a = a; }` the tree-walker reads the
+  OUTER `a`, while the VM reports "Cannot read a local variable in its
+  own initializer.".
+- **Type-error wording for operators other than `+`:** the VM says
+  "Operands to '-' must be numbers." (likewise `*`, `/`, `%`, `<`, `>`)
+  and "Operand to unary '-' must be a number."; the tree-walker says
+  "Operands must be numbers." and "Operand must be a number.". Because
+  the compiler builds `<=` and `>=` from `>` and `<` plus a negation,
+  their errors name that underlying operator.
+- **Compile-error reporting:** the VM prints "Compile error at ..."
+  where the tree-walker prints "Error at ...", and the VM compiler has
+  no panic mode, so one syntax error can be followed by several
+  follow-on errors.
+- **Line numbers for errors raised inside natives:** the VM reports the
+  line of the call; the tree-walker prints `[line 0]`.
+- **A failed `class A < x {}` in the REPL** leaves `A` defined as an
+  empty class in the VM (the class is defined before the superclass is
+  checked); the tree-walker leaves it undefined.
+- **Where the tree-walker crashes or has undefined behavior,** the VM
+  behaves: a container that holds itself prints `[...]` or `{...}`;
+  NaN, infinite or enormous array indexes and slice bounds are range
+  errors; `sort` checks the whole array first, so a failed sort leaves
+  it untouched, and puts NaN last.
+- **Limits the tree-walker does not have:** see "Known limits".
 
 ## How to run it
 
