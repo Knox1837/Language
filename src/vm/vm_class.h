@@ -4,10 +4,11 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include "gc.h"
 #include "vm_closure.h"
 #include "vm_value.h"
 
-class VMClass {
+class VMClass : public GCObject {
 public:
     std::string name;
     std::shared_ptr<VMClass> superclass; // nullptr when declared without "< Superclass"
@@ -24,21 +25,48 @@ public:
         }
         return nullptr;
     }
+
+    void traceChildren(const GCVisitor& visit) const override {
+        if (superclass) visit(superclass.get());
+        for (const auto& method : methods) visit(method.second.get());
+    }
+    void dropChildren() override {
+        superclass.reset();
+        methods.clear();
+    }
 };
 
-class VMInstance {
+class VMInstance : public GCObject {
 public:
     std::shared_ptr<VMClass> klass;
     std::unordered_map<std::string, VMValue> fields; // created on first assignment; there is no declared field list
 
     explicit VMInstance(std::shared_ptr<VMClass> klass) : klass(std::move(klass)) {}
+
+    void traceChildren(const GCVisitor& visit) const override {
+        if (klass) visit(klass.get());
+        for (const auto& field : fields) gcVisitValue(field.second, visit);
+    }
+    void dropChildren() override {
+        fields.clear();
+        klass.reset();
+    }
 };
 
 // A method read off an instance (`obj.method`, `super.method`): the method's closure plus the instance it was read from, so calling it later still has the right `this`.
-class VMBoundMethod {
+class VMBoundMethod : public GCObject {
 public:
     VMValue receiver;
     std::shared_ptr<VMClosure> method;
 
     VMBoundMethod(VMValue receiver, std::shared_ptr<VMClosure> method) : receiver(std::move(receiver)), method(std::move(method)) {}
+
+    void traceChildren(const GCVisitor& visit) const override {
+        gcVisitValue(receiver, visit);
+        if (method) visit(method.get());
+    }
+    void dropChildren() override {
+        receiver = VMValue{};
+        method.reset();
+    }
 };

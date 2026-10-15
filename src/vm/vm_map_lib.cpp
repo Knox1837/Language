@@ -89,12 +89,16 @@ bool getVMMapMethod(const std::shared_ptr<VMMap>& map, const std::string& name, 
     for (const auto& op : kOps) {
         if (name == op.name) {
             MapOp fn = op.fn;
-            // Captures the map, so the returned native stays bound to this instance: `var k = m.keys; k()` lists m's keys at call time.
-            result = VMValue{std::make_shared<VMNative>(
+            // The returned native stays bound to this map: `var k = m.keys; k()` lists m's keys at call time.
+            // The map is held by the native's boundReceiver field (visible to the garbage collector), not captured by the lambda; the lambda only has a raw pointer, and turns it back into a shared_ptr when called.
+            VMMap* raw = map.get();
+            auto native = std::make_shared<VMNative>(
                 op.name, op.arity,
-                [map, fn](std::vector<VMValue>& args, VMValue& out, std::string& error) {
-                    return fn(map, args, out, error);
-                })};
+                [raw, fn](std::vector<VMValue>& args, VMValue& out, std::string& error) {
+                    return fn(std::static_pointer_cast<VMMap>(raw->shared_from_this()), args, out, error);
+                });
+            native->boundReceiver = VMValue{map};
+            result = VMValue{native};
             return true;
         }
     }

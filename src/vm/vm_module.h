@@ -4,10 +4,16 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include "gc.h"
 #include "vm_value.h"
 
-class VMModule {
+class VMModule : public GCObject {
 public:
     std::string path; // the resolved file path (the cache key); empty for the main script's module
     std::unordered_map<std::string, VMValue> globals;
+
+    void traceChildren(const GCVisitor& visit) const override {
+        for (const auto& global : globals) gcVisitValue(global.second, visit);
+    }
+    void dropChildren() override { globals.clear(); }
 };

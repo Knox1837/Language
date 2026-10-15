@@ -196,12 +196,15 @@ bool getVMArrayMethod(const std::shared_ptr<VMArray>& array, const std::string& 
     for (const auto& op : kOps) {
         if (name == op.name) {
             ArrayOp fn = op.fn;
-            // The lambda captures the array, so the returned native is permanently bound to this instance: `var p = a.push; p(1);` appends to `a`.
-            result = VMValue{std::make_shared<VMNative>(
+            // The returned native is permanently bound to this array: `var p = a.push; p(1);` appends to `a`.
+            VMArray* raw = array.get();
+            auto native = std::make_shared<VMNative>(
                 op.name, op.arity,
-                [array, fn](std::vector<VMValue>& args, VMValue& out, std::string& error) {
-                    return fn(array, args, out, error);
-                })};
+                [raw, fn](std::vector<VMValue>& args, VMValue& out, std::string& error) {
+                    return fn(std::static_pointer_cast<VMArray>(raw->shared_from_this()), args, out, error);
+                });
+            native->boundReceiver = VMValue{array};
+            result = VMValue{native};
             return true;
         }
     }
