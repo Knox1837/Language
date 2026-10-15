@@ -34,6 +34,7 @@ static std::string stringifyImpl(const VMValue& value, std::vector<const void*>&
     if (isVMNative(value)) return "<native fn " + asVMNative(value)->name + ">";
     if (isVMClass(value)) return "<class " + asVMClass(value)->name + ">";
     if (isVMInstance(value)) return "<instance of " + asVMInstance(value)->klass->name + ">";
+    if (isVMModule(value)) return "<module>";
     if (isVMBoundMethod(value)) return "<fn " + asVMBoundMethod(value)->method->function->name + ">"; // a bound method prints like the plain function, as in the tree-walker
     if (isVMArray(value)) {
         auto array = asVMArray(value);

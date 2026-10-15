@@ -63,6 +63,11 @@ static int runVmFile(const std::string& path) {
     buffer << file.rdbuf();
 
     VM vm;
+    // Same rule as the tree-walker: relative imports resolve against the script's own directory.
+    std::filesystem::path scriptDir = std::filesystem::path(path).parent_path();
+    if (scriptDir.empty()) scriptDir = ".";
+    vm.setModuleBaseDir(scriptDir.string());
+
     InterpretResult result = vm.interpret(buffer.str());
     if (result == InterpretResult::COMPILE_ERROR) return 65;
     if (result == InterpretResult::RUNTIME_ERROR) return 70;
@@ -71,6 +76,8 @@ static int runVmFile(const std::string& path) {
 
 static void runVmPrompt() {
     VM vm;
+    vm.setModuleBaseDir("."); // no script file in the REPL, so imports resolve against the working directory
+
     std::string line;
     std::cout << "mylang-vm> ";
     while (std::getline(std::cin, line)) {

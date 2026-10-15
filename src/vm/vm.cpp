@@ -9,17 +9,36 @@
 #include "vm_native.h"
 #include "vm_stdlib.h"
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 
 VM::VM() {
-    registerVMStdlib(globals);
+    mainModule = std::make_shared<VMModule>();
+    registerVMStdlib(mainModule->globals);
+}
+
+void VM::setModuleBaseDir(const std::string& dir) {
+    moduleBaseDir = dir;
+    hasModuleBaseDir = true;
+}
+
+// Same rule as the tree-walker's ModuleLoader: relative paths resolve against the base directory, and weakly_canonical normalizes "." and ".." so the cache key is the same however the path was written.
+std::string VM::resolveModulePath(const std::string& path) const {
+    namespace fs = std::filesystem;
+    fs::path p(path);
+    fs::path resolved = p.is_absolute() ? p : fs::path(moduleBaseDir) / p;
+    std::error_code ec;
+    fs::path canonical = fs::weakly_canonical(resolved, ec);
+    return ec ? resolved.string() : canonical.string();
 }
 
 InterpretResult VM::interpret(const std::string& source) {
     stack.clear();
     frames.clear();
     openUpvalues.clear();
+    currentlyLoading.clear(); // a runtime error inside an import on an earlier REPL line must not leave that file "still loading"
 
     Compiler compiler;
     std::shared_ptr<VMFunction> script = compiler.compile(source);
@@ -31,9 +50,10 @@ InterpretResult VM::interpret(const std::string& source) {
     // This keeps it on the same CallFrame footing as any real function from this point on.
     auto scriptClosure = std::make_shared<VMClosure>();
     scriptClosure->function = script;
+    scriptClosure->module = mainModule.get();
 
     push(VMValue{scriptClosure}); // occupies slot 0, same convention every real call uses
-    frames.push_back(CallFrame{scriptClosure, 0, 0});
+    frames.push_back(CallFrame{scriptClosure, 0, 0, nullptr});
 
     return run();
 }
@@ -49,7 +69,9 @@ uint16_t VM::readShort() {
 }
 
 VMValue VM::readConstant() {
-    return currentFrame().closure->function->chunk.constants[readByte()];
+    size_t index = wideOperand ? readShort() : readByte();
+    wideOperand = false;
+    return currentFrame().closure->function->chunk.constants[index];
 }
 
 void VM::push(VMValue value) {
@@ -163,7 +185,7 @@ bool VM::call(std::shared_ptr<VMClosure> closure, int argCount) {
     }
 
     // stackBase points AT the callee value itself (slot 0), with arguments starting at slot 1. this matches the compiler reserving local slot 0 for the callee in EVERY function
-    frames.push_back(CallFrame{closure, 0, stack.size() - argCount - 1});
+    frames.push_back(CallFrame{closure, 0, stack.size() - argCount - 1, nullptr});
     return true;
 }
 
@@ -195,12 +217,28 @@ void VM::closeUpvalues(size_t fromIndex) {
 }
 
 InterpretResult VM::run() {
+    wideOperand = false;
     while (true) {
         OpCode instruction = static_cast<OpCode>(readByte());
 
         switch (instruction) {
             case OpCode::OP_CONSTANT: {
                 push(readConstant());
+                break;
+            }
+            case OpCode::OP_WIDE: {
+                // Only the compiler emits this, always directly before an instruction that reads a constant index. Check anyway so a stray prefix can't silently corrupt the next operand.
+                auto next = static_cast<OpCode>(currentFrame().closure->function->chunk.code[currentFrame().ip]);
+                switch (next) {
+                    case OpCode::OP_CONSTANT: case OpCode::OP_DEFINE_GLOBAL: case OpCode::OP_GET_GLOBAL: case OpCode::OP_SET_GLOBAL:
+                    case OpCode::OP_CLOSURE: case OpCode::OP_GET_PROPERTY: case OpCode::OP_SET_PROPERTY: case OpCode::OP_CLASS:
+                    case OpCode::OP_METHOD: case OpCode::OP_GET_SUPER: case OpCode::OP_IMPORT:
+                        wideOperand = true;
+                        break;
+                    default:
+                        runtimeError("OP_WIDE before an instruction with no constant operand.");
+                        return InterpretResult::RUNTIME_ERROR;
+                }
                 break;
             }
             case OpCode::OP_ADD: {
@@ -274,11 +312,12 @@ InterpretResult VM::run() {
             }
             case OpCode::OP_DEFINE_GLOBAL: {
                 std::string name = asVMString(readConstant());
-                globals[name] = pop();
+                currentGlobals()[name] = pop();
                 break;
             }
             case OpCode::OP_GET_GLOBAL: {
                 std::string name = asVMString(readConstant());
+                auto& globals = currentGlobals();
                 auto it = globals.find(name);
                 if (it == globals.end()) {
                     runtimeError("Undefined variable '" + name + "'.");
@@ -289,6 +328,7 @@ InterpretResult VM::run() {
             }
             case OpCode::OP_SET_GLOBAL: {
                 std::string name = asVMString(readConstant());
+                auto& globals = currentGlobals();
                 if (globals.find(name) == globals.end()) {
                     runtimeError("Undefined variable '" + name + "'.");
                     return InterpretResult::RUNTIME_ERROR;
@@ -370,6 +410,7 @@ InterpretResult VM::run() {
                 auto function = asVMFunction(readConstant());
                 auto closure = std::make_shared<VMClosure>();
                 closure->function = function;
+                closure->module = currentFrame().closure->module; // a closure belongs to the module whose code created it
 
                 // Read exactly `function->upvalueCount` (isLocal, index) pairs
                 for (int i = 0; i < function->upvalueCount; i++) {
@@ -542,8 +583,67 @@ InterpretResult VM::run() {
                     push(std::move(method));
                     break;
                 }
+                if (isVMModule(object)) {
+                    // m.name reads a top-level binding of the imported file (live: it sees later changes the module makes to its own variables). Unlike an instance, there are no methods to bind.
+                    auto module = asVMModule(object);
+                    auto found = module->globals.find(name);
+                    if (found == module->globals.end()) {
+                        runtimeError("Undefined variable '" + name + "'.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(found->second);
+                    break;
+                }
                 runtimeError("Only instances, arrays, maps, and modules have properties.");
                 return InterpretResult::RUNTIME_ERROR;
+            }
+            case OpCode::OP_IMPORT: {
+                std::string path = asVMString(readConstant()); // copy: readConstant() returns a temporary
+                if (!hasModuleBaseDir) {
+                    runtimeError("Imports are not available in this context (no base directory set).");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                std::string resolved = resolveModulePath(path);
+
+                auto cached = moduleCache.find(resolved);
+                if (cached != moduleCache.end()) {
+                    push(VMValue{cached->second}); // already imported somewhere: reuse the same module object, don't run the file again
+                    break;
+                }
+                if (currentlyLoading.count(resolved)) {
+                    runtimeError("Circular import detected for '" + path + "'.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+
+                std::ifstream file(resolved);
+                if (!file) {
+                    runtimeError("Could not open imported file '" + path + "'.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+
+                Compiler importCompiler; // syntax errors in the file are printed by the compiler, then the import fails
+                std::shared_ptr<VMFunction> script = importCompiler.compile(buffer.str());
+                if (!script) {
+                    runtimeError("Could not compile imported file '" + path + "'.");
+                    return InterpretResult::RUNTIME_ERROR;
+                }
+
+                auto module = std::make_shared<VMModule>();
+                module->path = resolved;
+                registerVMStdlib(module->globals); // each module has its own copy of the standard library, like the tree-walker's per-module Interpreter
+
+                auto closure = std::make_shared<VMClosure>();
+                closure->function = script;
+                closure->module = module.get();
+
+                // Run the file's top-level code as an ordinary call with no arguments. No recursion into run(): this is just one more frame, so a long chain of imports doesn't use C++ stack.
+                // OP_RETURN from this frame caches the module and pushes it as the import's value.
+                currentlyLoading.insert(resolved);
+                push(VMValue{closure});
+                frames.push_back(CallFrame{closure, 0, stack.size() - 1, module});
+                break;
             }
             case OpCode::OP_CLASS: {
                 std::string name = asVMString(readConstant());
@@ -607,6 +707,7 @@ InterpretResult VM::run() {
             case OpCode::OP_RETURN: {
                 VMValue result = pop();
                 size_t returningFromStackBase = currentFrame().stackBase;
+                std::shared_ptr<VMModule> finishedImport = currentFrame().importedModule; // copy: the frame is popped below
 
                 // Close any of THIS call's locals that some closure captured (must happen BEFORE the stack is truncated below, or open upvalues would dangle)
                 closeUpvalues(returningFromStackBase);
@@ -621,7 +722,14 @@ InterpretResult VM::run() {
                 // Discard everything the just-finished call left behind its callee value (at stackBase), all its arguments and locals (stackBase+1 and up) 
                 // then push the return value where the caller can use it as this whole call-expression's result.
                 stack.resize(returningFromStackBase);
-                push(result);
+                if (finishedImport) {
+                    // An imported file finished its top-level code: the import expression's value is the module, and from now on it is cached.
+                    currentlyLoading.erase(finishedImport->path);
+                    moduleCache[finishedImport->path] = finishedImport;
+                    push(VMValue{finishedImport});
+                } else {
+                    push(result);
+                }
                 break;
             }
             default: {

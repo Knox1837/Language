@@ -60,4 +60,6 @@ enum class OpCode : uint8_t {
     OP_CHECK_FIELDS,   // PEEKS the top of the stack and errors unless it is an instance. Emitted before the right side of `obj.x = v` / `obj.x += v`, so a bad target fails BEFORE the right side runs, like the tree-walker
     OP_DUP,            // duplicate the top value: [.. a] becomes [.. a a]. Used by `obj.x += v` so `obj` is evaluated ONCE
     OP_MAP,            // operand: a 2-byte entry count N. Pops 2N values laid out key, value, key, value, ... (keys are strings), builds a map from them (a repeated key keeps the LAST value), pushes it
+    OP_WIDE,           // prefix: the NEXT instruction's constant-pool operand is 2 bytes (big-endian) instead of 1. Emitted only before an instruction that takes a constant index, and only when the index is above 255
+    OP_IMPORT,         // operand: constant-pool index of the path string. Loads the file (or reuses the cached module) and leaves the module object on the stack. A first-time load pushes a call frame for the file's top-level code, and OP_RETURN from that frame supplies the module object instead of nil
 };
