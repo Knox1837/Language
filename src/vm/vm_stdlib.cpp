@@ -452,6 +452,20 @@ static void registerIo(Globals& globals) {
     });
 }
 
+// gc() and heapSize() exist mainly so scripts (and tests) can observe the garbage collector. They are VM-only: the tree-walker has no such functions.
+static void registerGc(Globals& globals) {
+    // gc(): run a collection now; returns how many heap objects it freed.
+    define(globals, "gc", 0, [](std::vector<VMValue>&, VMValue& result, std::string&) {
+        result = static_cast<double>(GC::collect());
+        return true;
+    });
+    // heapSize(): how many heap objects (arrays, maps, instances, classes, closures, upvalues, modules, natives) exist right now.
+    define(globals, "heapSize", 0, [](std::vector<VMValue>&, VMValue& result, std::string&) {
+        result = static_cast<double>(GC::liveCount());
+        return true;
+    });
+}
+
 void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerMath(globals);
     registerString(globals);
@@ -459,4 +473,5 @@ void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerIo(globals);
     registerVMArrayLib(globals); // push, pop, length, ... (the array functions live in their own file)
     registerVMMapLib(globals);   // keys, values, hasKey, remove
+    registerGc(globals);         // gc, heapSize
 }

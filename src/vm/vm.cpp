@@ -1,6 +1,7 @@
 // vm.cpp: the actual bytecode execution loop. 
 #include "vm.h"
 #include "compiler.h"
+#include "gc.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
 #include "vm_class.h"
@@ -17,6 +18,16 @@
 VM::VM() {
     mainModule = std::make_shared<VMModule>();
     registerVMStdlib(mainModule->globals);
+}
+
+VM::~VM() {
+    // Let go of everything the VM itself holds. What is left is held only by other heap objects, and one collection frees all of it, cycles included.
+    frames.clear();
+    stack.clear();
+    openUpvalues.clear();
+    mainModule->globals.clear();
+    moduleCache.clear();
+    GC::collect();
 }
 
 void VM::setModuleBaseDir(const std::string& dir) {
@@ -219,6 +230,9 @@ void VM::closeUpvalues(size_t fromIndex) {
 InterpretResult VM::run() {
     wideOperand = false;
     while (true) {
+#ifdef MYLANG_GC_STRESS
+        if (GC::shouldCollect()) GC::collect(); // test builds only: collect between ANY two instructions
+#endif
         OpCode instruction = static_cast<OpCode>(readByte());
 
         switch (instruction) {
@@ -397,10 +411,13 @@ InterpretResult VM::run() {
             case OpCode::OP_LOOP: {
                 uint16_t offset = readShort();
                 currentFrame().ip -= offset;
+                // A loop is where a script can allocate without end, so a loop is where the collector gets its chance (calls are the other place, below).
+                if (GC::shouldCollect()) GC::collect();
                 break;
             }
             case OpCode::OP_CALL: {
                 int argCount = readByte();
+                if (GC::shouldCollect()) GC::collect(); // the callee and its arguments are on the stack, so they count as roots
                 if (!callValue(peekStack(argCount), argCount)) {
                     return InterpretResult::RUNTIME_ERROR;
                 }

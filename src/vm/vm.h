@@ -28,6 +28,7 @@ struct CallFrame {
 class VM {
 public:
     VM(); // defines the native functions (see vm_stdlib.cpp) as globals
+    ~VM(); // drops every root and runs a last collection, so even reference cycles are freed when the VM goes away
     // Compiles and runs `source` in one call: convenience entry point matching how main.cpp invokes the tree-walking interpreter.
     InterpretResult interpret(const std::string& source);
 

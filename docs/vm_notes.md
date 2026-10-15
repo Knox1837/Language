@@ -87,14 +87,14 @@ imported twice (under any spelling of its path) is the same cached
 module, and circular imports are an error. See "Design note: imports
 and modules" below.
 
-Not yet implemented: a real garbage
-collector — closures, arrays, maps and instances make this considerably
-more relevant than before, since `shared_ptr` reference counting cannot
-detect or collect a REFERENCE CYCLE (a closure that captures a variable
-which ends up holding that same closure, `push(a, a)`, `m["self"] = m`,
-or `obj.me = obj`); this remains a known, deferred limitation rather
-than a correctness bug affecting any ordinary program shape. See "Known
-limits" and "Known differences from the tree-walker" below.
+**Garbage collection** works: memory is still freed by `shared_ptr`
+reference counting, and a cycle collector (`gc.h`/`gc.cpp`) finds and
+frees what counting cannot, namely reference cycles (a closure that
+captures a variable holding itself, `push(a, a)`, `m["self"] = m`,
+`obj.me = obj`, an instance holding one of its own bound methods). It
+runs by itself during loops and calls, once more when the VM is
+destroyed, and on demand through the VM-only natives `gc()` and
+`heapSize()`. See "Design note: garbage collection" below.
 
 ## Architecture
 
@@ -132,6 +132,9 @@ limits" and "Known differences from the tree-walker" below.
 - **`vm_class.h`** — `VMClass` (name, superclass, method table),
   `VMInstance` (class + field table) and `VMBoundMethod` (a method plus
   the instance it was read from).
+- **`gc.h`/`gc.cpp`** — `GCObject`, the base class of every heap object
+  that can be part of a cycle, the list of all of them, and the
+  collector; see "Design note: garbage collection".
 - **`vm_module.h`** — `VMModule`, one file's global namespace (a table
   of globals plus the resolved path); see "Design note: imports and
   modules".
@@ -709,6 +712,104 @@ superclass.", and "A class can't inherit from itself.". The tree-walker
 has no such checks; it finds out at run time ("Undefined variable
 'this'."). See "Known differences from the tree-walker".
 
+## Design note: garbage collection
+
+**The problem.** Everything is reference counted (`shared_ptr`), which
+frees almost every object the instant the last reference goes. It cannot
+free a cycle: each member of `a = []; push(a, a);` keeps the others'
+counts above zero for ever. The old limitation list was exactly the
+cycles reachable from scripts: a closure that captures itself,
+containers that contain themselves, an instance holding itself or one of
+its own bound methods, and a local class whose methods name it.
+
+**The approach: trial deletion over the existing counts** (the technique
+of CPython's cycle collector), not a tracing collector with its own
+root set. Every array, map, class, instance, bound method, closure,
+upvalue, module and bound native derives from `GCObject`, which links it
+into one intrusive list of all such objects. `GC::collect()` then:
+
+1. starts each object at its `shared_ptr` use count
+   (`weak_from_this().use_count()`, which reads the count without
+   creating a reference);
+2. calls each object's `traceChildren()` and subtracts one from every
+   object it references, so what remains of an object's count is the
+   number of references from OUTSIDE the heap (the VM stack, call
+   frames, open upvalues, `mainModule`, `moduleCache`, and any C++ local
+   holding a `shared_ptr` at that moment);
+3. marks every object with a nonzero remainder as alive, and everything
+   reachable from it;
+4. takes a strong reference to every unmarked object, calls its
+   `dropChildren()` (which clears its arrays, fields, upvalues and so
+   on), and releases them all together; ordinary reference counting
+   frees the pieces.
+
+**Why this design.** The collector never has to be told what the roots
+are, so a root cannot be forgotten: anything that holds a `shared_ptr`
+is automatically a root, including the temporaries inside half-built
+array literals, arguments of a native that is running, and values held
+by C++ code in the middle of an instruction. That makes it safe to run
+at ANY moment, with no "safe point" discipline, and it needed no change
+to how values are stored or passed around.
+
+**The one rule: `traceChildren()` must report exactly the `shared_ptr`s
+the object holds, once each.** Missing one is harmless (the object just
+looks externally referenced, so it survives and may leak). Reporting
+one that does not exist could free a live object, so `collect()` checks
+that no remainder went negative and, if one did, frees nothing. Raw
+pointers and weak pointers are never reported, because they add nothing
+to a use count: `VMClosure::module` is raw, which is also why a module
+and its closures do not form a cycle.
+
+**Bound natives.** `a.push` and `m.keys` used to capture the array or
+map inside the native's `std::function`, which the collector cannot
+see, so `a[0] = a.push` was an unfindable cycle. The native now holds
+the receiver in its `boundReceiver` field (reported by `traceChildren`),
+and its function holds only a raw pointer that it turns back into a
+`shared_ptr` with `shared_from_this()` when called; the field keeps the
+receiver alive for exactly as long as the native.
+
+**Not collected objects:** numbers, strings and `VMFunction` (compiled
+code holds only constants, never a closure or container) cannot be part
+of a cycle and are ordinary reference-counted values.
+
+**When it runs.** `GC::shouldCollect()` is one inlined comparison: true
+once enough `GCObject`s were created since the last collection. It is
+checked at `OP_LOOP` (a loop can allocate without end) and at `OP_CALL`
+(so can recursion). The threshold is the larger of 10,000 allocations and
+the number of objects that survived the last collection, so the total
+collection work stays proportional to the allocation rate however large
+the heap grows. The VM destructor drops the stack, frames, open
+upvalues, the main module's globals and the module cache, then collects
+once more, so even cycles that were still reachable when the program
+ended are freed (a sanitizer build reports no leaks).
+
+**Scripts can see it.** `gc()` collects now and returns how many objects
+it freed; `heapSize()` returns how many `GCObject`s exist. Both are
+VM-only (the tree-walker has neither), and are mainly there for tests:
+see `test_vm_gc_cycles`, `test_vm_gc_alive` and `test_vm_gc_auto`.
+
+**Stress build.** Compiling with `-DMYLANG_GC_STRESS` sets the threshold
+to 1 and also checks between EVERY pair of instructions, so a collection
+happens at almost every opportunity. Running the whole test suite
+under that define plus `-fsanitize=address,undefined -D_GLIBCXX_DEBUG`
+is the way to catch a premature free; the output of every test must be
+identical to a normal build's (apart from what `gc()` itself returns,
+since garbage may already be gone).
+
+**Cost.** Each heap object grew by a vtable pointer, two list pointers,
+two scratch fields and the `weak_ptr` inside `enable_shared_from_this`.
+Measured against the VM before the collector (optimized build, best of
+several runs): about 4% slower on a call-heavy benchmark (`fib(30)`) and
+about 10% on an allocation-heavy one (2 million iterations, each making
+an array and an instance). A collection is linear in the number of heap
+objects.
+
+**Adding a new heap object type:** derive from `GCObject`; implement
+`traceChildren()` (every `shared_ptr` member, either with `visit(p.get())`
+or `gcVisitValue(v, visit)` for a `VMValue`) and `dropChildren()`; add
+it to `gcVisitValue()` in `gc.cpp` and to the `VMValue` variant; create
+it with `std::make_shared`, which `collect()` relies on.
+
 ## Design note: imports and modules
 
 `import "path" as name;` is a declaration like `var`: it works at the top
@@ -821,17 +922,22 @@ index  > 255:   OP_WIDE  OP_GET_GLOBAL  hi lo
   values are all distinct (two slots per entry).
 - **Jumps are 16-bit** (65535 bytes), as are array and map literal
   sizes.
-- **No garbage collector.** Reference cycles leak: a closure that
-  captures a variable holding itself; an array or map that contains
-  itself (`push(a, a)`, `m["self"] = m`); an instance that holds itself
-  or one of its own bound methods (`obj.me = obj`, `obj.cb = obj.m`);
-  and a class declared INSIDE a function whose methods name that class
-  (the class owns the method, which owns an upvalue back to the class;
-  a global class naming itself is a global lookup and does not leak).
-  Plain arrays, maps, instances and closures are freed normally.
-  Imported modules are never freed before the VM itself (the cache keeps
-  them), and each one carries its own copy of the standard library, a
-  few dozen natives, which is a small fixed cost per imported file.
+- **Garbage is collected in batches, not instantly.** Reference
+  counting frees ordinary garbage at once, but a cycle stays in memory
+  until the next collection: at least 10,000 object allocations later,
+  or more for a big heap (see "Design note: garbage collection"). A
+  collection pauses the script for time linear in the number of heap
+  objects.
+- **A reference the collector cannot see survives.** Anything that
+  holds a `shared_ptr` without reporting it from `traceChildren()` makes
+  its target look externally referenced, so a cycle through it is never
+  freed. No such reference exists today (bound natives used to be the
+  one case, and report their receiver now); a new heap type or a native
+  that stores a value must follow the rule in the design note.
+- **Imported modules are never freed before the VM itself** (the cache
+  keeps them), and each one carries its own copy of the standard
+  library, a few dozen natives, which is a small fixed cost per
+  imported file.
 - **Very deep nesting overflows the C++ stack.** Printing, and
   eventually freeing, a nested array or map recurses once per level.
   Measured for arrays on an optimized build with an 8 MB stack: printing
@@ -881,6 +987,8 @@ the tests compare them line by line. What still differs:
   same "Compile error at ..." lines) and then fails the import with
   "Could not compile imported file 'path'.", a runtime error at the
   `import` line.
+- **`gc()` and `heapSize()` exist only in the VM.** A script that calls
+  them fails in the tree-walker with "Undefined variable".
 - **Limits the tree-walker does not have:** see "Known limits".
 
 ## How to run it
