@@ -82,6 +82,7 @@ private:
     void varDeclaration();
     void functionDeclaration();
     void classDeclaration();
+    void importDeclaration(); // import "path" as name;  ->  OP_IMPORT, then the alias is defined like a `var`
     void method();      // one method inside a class body: name "(" params ")" "{" body "}", then OP_METHOD
     void functionBody(const std::string& name, FunctionType type = FunctionType::FUNCTION, const std::string& kind = "function"); // parses "(" params ")" "{" body "}" into a NEW FunctionState; `kind` only words the error messages
     void emitReturn();  // the implicit return at the end of a body: `this` for an initializer, nil for everything else
@@ -99,7 +100,7 @@ private:
     // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local the split happens here based on scopeDepth.
     void declareVariable(const Token& name);       // records a LOCAL in the current FunctionState (no-op at global scope)
     void markInitialized();                         // marks the most recently declared local as ready to reference
-    void defineVariable(uint8_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or (for a local) just calls markInitialized()
+    void defineVariable(size_t globalConstant);    // emits the actual OP_DEFINE_GLOBAL, or (for a local) just calls markInitialized()
     int resolveLocal(FunctionState& state, const Token& name); // returns a local's stack slot, or -1 if not a local
 
     // Recursively walks OUTWARD through enclosing functions to see if any of them have a local with the given name, returning its upvalue index if so, or -1 if not.
@@ -132,11 +133,11 @@ private:
     uint8_t argumentList(); // "(" (expression ("," expression)*)? ")" -- returns the argument count
 
     // Reads a variable name from `name`, adds it to the constant pool as a string, and returns its constant index
-    uint8_t identifierConstant(const Token& name);
+    size_t identifierConstant(const Token& name);
 
     // Adds `value` to the current function's constant pool (reusing an equal number or string already there) and returns its index.
-    // If the pool is full, reports "Too many constants in one function." (once per function) and returns 0; the compile has failed by then, so that bytecode never runs.
-    uint8_t makeConstant(VMValue value);
+    // If the pool (65536 entries) is full, reports "Too many constants in one function." (once per function) and returns 0; the compile has failed by then, so that bytecode never runs.
+    size_t makeConstant(VMValue value);
 
     // token-stream helpers (same shape as the tree-walker's Parser)
     const Token& peek() const;
@@ -152,6 +153,8 @@ private:
     void emitByte(uint8_t byte);
     void emitByte(OpCode op);
     void emitConstant(VMValue value);
+    // Emits `op` followed by a constant-pool index: one operand byte, or OP_WIDE before the op and a 2-byte operand when the index is above 255.
+    void emitConstantOp(OpCode op, size_t constantIndex);
     int currentLine() const;
 
     // Emits a jump instruction with a 2-byte PLACEHOLDER offset, and returns the byte position of that placeholder so it can be fixed up later via patchJump() once the real distance is known.

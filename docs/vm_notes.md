@@ -80,7 +80,14 @@ assignment (`obj.x = 1`, `obj.x += 1`), methods that use `this`, bound
 methods that remember their instance (`var f = obj.method`), single
 inheritance, and `super.method()`. See "Design note: classes" below.
 
-Not yet implemented (in rough build order): imports, and a real garbage
+**Imports** work: `import "file.mylang" as name;` runs the file once in
+its own global scope and binds `name` to a module object, `name.thing`
+reads the file's top-level `def`/`class`/`var` bindings, the same file
+imported twice (under any spelling of its path) is the same cached
+module, and circular imports are an error. See "Design note: imports
+and modules" below.
+
+Not yet implemented: a real garbage
 collector — closures, arrays, maps and instances make this considerably
 more relevant than before, since `shared_ptr` reference counting cannot
 detect or collect a REFERENCE CYCLE (a closure that captures a variable
@@ -93,12 +100,14 @@ limits" and "Known differences from the tree-walker" below.
 
 - **`opcode.h`** — the instruction set. One enum value per instruction;
   some are followed by an operand byte (e.g. `OP_CONSTANT`'s index into
-  the constant pool).
+  the constant pool). `OP_WIDE` is a prefix that widens the next
+  instruction's constant index to two bytes; see "Design note: wide
+  constant operands".
 - **`vm_value.h`** — the VM's own value type, deliberately SEPARATE from
   the tree-walker's `Value` (`src/interpreter/value.h`). A
   `std::variant` of nil / number / bool / string / `VMFunction` /
   `VMClosure` / `VMNative` / `VMArray` / `VMMap` / `VMClass` /
-  `VMInstance` / `VMBoundMethod`. Strings back both
+  `VMInstance` / `VMBoundMethod` / `VMModule`. Strings back both
   variable-name constants and real string literals. `VMFunction` only
   ever appears in a chunk's constant pool (compiled code); the runtime
   callable is the closure. The type grew one case at a time as the VM
@@ -123,12 +132,15 @@ limits" and "Known differences from the tree-walker" below.
 - **`vm_class.h`** — `VMClass` (name, superclass, method table),
   `VMInstance` (class + field table) and `VMBoundMethod` (a method plus
   the instance it was read from).
+- **`vm_module.h`** — `VMModule`, one file's global namespace (a table
+  of globals plus the resolved path); see "Design note: imports and
+  modules".
 - **`vm_stdlib.h`/`.cpp`** — the native functions themselves, grouped
   like the tree-walker's libs (math, string, type, io), plus
   `stringifyVMValue()`, the formatter shared by `print` and `str()`.
 - **`chunk.h`/`.cpp`** — one compiled unit: a flat byte array (`code`), a
-  constant pool (`constants`, which reuses equal numbers and strings —
-  see "Known limits"), and a parallel line-number array (`lines`) for
+  constant pool (`constants`, which reuses equal numbers and strings,
+  found through hash maps, up to 65536 entries — see "Known limits"), and a parallel line-number array (`lines`) for
   error reporting.
 - **`compiler.h`/`.cpp`** — a single-pass Pratt parser: reads tokens
   (reusing the existing `Lexer`/`Token` from `src/lexer/`) and emits
@@ -697,24 +709,116 @@ superclass.", and "A class can't inherit from itself.". The tree-walker
 has no such checks; it finds out at run time ("Undefined variable
 'this'."). See "Known differences from the tree-walker".
 
+## Design note: imports and modules
+
+`import "path" as name;` is a declaration like `var`: it works at the top
+level, inside a block, and inside a function, and `name` is a global or
+a local accordingly. The compiler emits `OP_IMPORT <path constant>` and
+then defines `name` exactly as it would for `var name = <expr>;`, so the
+module object the instruction leaves on the stack simply becomes the
+variable's value.
+
+**Every file has its own globals.** Globals used to be one table in the
+`VM`. They now live in a `VMModule` (`vm_module.h`): the main script has
+one (`VM::mainModule`, which survives from one REPL line to the next),
+and each imported file gets its own, pre-filled with its own copy of the
+standard library. That is what gives the isolation the language spec
+promises: an imported file cannot see or change the importer's
+variables, and `m.sqrt` works because `sqrt` is a global of `m`, exactly
+as in the tree-walker, whose per-module `Interpreter` also registers the
+whole standard library.
+
+**A closure remembers its module.** `OP_GET_GLOBAL`, `OP_SET_GLOBAL` and
+`OP_DEFINE_GLOBAL` use `currentFrame().closure->module->globals`, and
+`OP_CLOSURE` copies the module from the enclosing closure. So a function
+imported from `lib.mylang` keeps resolving names in `lib.mylang` when it
+is called from anywhere, and a method of an imported class, called on an
+instance made elsewhere, does too. The pointer is a raw `VMModule*`: every
+module lives as long as the VM (the VM owns the main one, `moduleCache`
+owns the rest), and a `shared_ptr` would form a cycle (module, its
+globals, a closure, back to the module) that is never freed.
+
+**Loading is a call, not a recursion.** The first time a path is imported,
+`OP_IMPORT` resolves it, reads and compiles the file, builds a closure
+for the file's top-level code and pushes an ordinary zero-argument call
+frame for it. The `CallFrame` carries `importedModule`; when that frame
+reaches `OP_RETURN`, the VM caches the module and pushes it (rather than
+the nil the top-level code returns) as the value of the import. Nothing
+calls `run()` recursively, so a long chain of imports does not use C++
+stack (a chain of 300 files was tested).
+
+**Resolution, caching, cycles:**
+- A relative path resolves against the top-level script's directory (the
+  current directory in the REPL), including for `import` statements
+  inside an imported file; `main.cpp` passes the directory through
+  `VM::setModuleBaseDir()`. `weakly_canonical` normalizes `.` and `..`,
+  so `"lib.mylang"`, `"./lib.mylang"` and `"sub/../lib.mylang"` are one
+  cache entry. Without a base directory `import` is a runtime error, as
+  in the tree-walker.
+- The cache (`moduleCache`) is filled when a file FINISHES loading, so a
+  file that fails half way is not cached and is run again by a later
+  import.
+- `currentlyLoading` holds the files whose top-level code is running; an
+  import of one of them is "Circular import detected for 'path'.".
+  `interpret()` clears the set, because a runtime error unwinds every
+  frame and a REPL line after it must not see a file as still loading.
+
+**Module values:** `m.name` is a lookup in the module's globals and is
+live (it sees later changes the module makes to its own variables); a
+missing name is "Undefined variable 'name'.", the tree-walker's message
+for the same thing. Assigning through a module (`m.x = 1`, `m.x += 1`)
+is "Only instances have fields.". A module prints as `<module>`, is
+truthy, and is equal only to itself. `OP_IMPORT` takes a constant index,
+so it is one of the instructions `OP_WIDE` can widen.
+
+## Design note: wide constant operands (`OP_WIDE`)
+
+A constant index used to be one operand byte, so a function could hold
+256 distinct constants. Every instruction that names a pool entry
+(`OP_CONSTANT`, `OP_DEFINE_GLOBAL`, `OP_GET_GLOBAL`, `OP_SET_GLOBAL`,
+`OP_CLOSURE`, `OP_GET_PROPERTY`, `OP_SET_PROPERTY`, `OP_CLASS`,
+`OP_METHOD`, `OP_GET_SUPER`) shares that one pool, so a separate "long"
+opcode for each would have meant ten new opcodes. Instead there is one
+prefix, `OP_WIDE`, that says "the NEXT instruction's constant index is
+two bytes (big-endian), not one":
+
+```
+index <= 255:   OP_GET_GLOBAL  idx
+index  > 255:   OP_WIDE  OP_GET_GLOBAL  hi lo
+```
+
+- **Compiler:** `emitConstantOp(op, index)` is the only place that
+  emits a constant-taking instruction, and it picks the form. Small
+  indexes (the common case) cost exactly what they did before.
+  `makeConstant()` and `identifierConstant()` now return `size_t`.
+- **VM:** `OP_WIDE` sets a flag, and `readConstant()` reads one or two
+  bytes depending on it and clears it. The `OP_WIDE` case first checks
+  that the next opcode is one of the ten above, so a stray prefix is a
+  runtime error ("OP_WIDE before an instruction with no constant
+  operand.") rather than a silently misread operand. `run()` clears
+  the flag on entry.
+- **OP_CLOSURE:** only its constant index is widened; the following
+  (isLocal, index) byte-pairs are unchanged, because they are stack
+  slots and upvalue indexes, not pool indexes.
+- **Pool lookup:** with room for 65536 entries, the old linear scan in
+  `Chunk::addConstant` would be quadratic, so equal strings and numbers
+  are found through two hash maps (numbers by bit pattern, which keeps
+  `0.0` and `-0.0` apart as before).
+
 ## Known limits
 
-- **256 distinct constants per function.** A constant's index is a
-  single operand byte. Numbers, strings and names live in the
-  enclosing function's constant pool, and an equal number or string is
-  stored ONCE and reused (`Chunk::addConstant`), so 300 copies of
-  `x = x + 1;` need three slots; only DISTINCT values count, and each
-  function has its own pool. Going over the limit is an ordinary
-  compile error, "Too many constants in one function." (reported once
-  per function, with the line of the first constant that did not fit).
-  An earlier version had no sharing and aborted the whole program with
-  an uncaught exception; for scale, the array tests went from 129-155
-  slots in the top-level chunk to 35-56. Map literals feel this limit
-  most, because every entry needs its key AND its value: about 125
-  entries with distinct numeric values already overflow (the
-  tree-walker has no such limit), though values that are variables, or
-  strings already in the pool, are cheaper. Lifting the limit for real
-  (a wide `OP_CONSTANT_LONG` operand) is possible but not needed yet.
+- **65536 distinct constants per function.** Numbers, strings and names
+  live in the enclosing function's constant pool, and an equal number
+  or string is stored ONCE and reused (`Chunk::addConstant`), so 300
+  copies of `x = x + 1;` need three slots; only DISTINCT values count,
+  and each function has its own pool. Going over the limit is an
+  ordinary compile error, "Too many constants in one function."
+  (reported once per function, with the line of the first constant that
+  did not fit). The limit used to be 256 (one operand byte); see
+  "Design note: wide constant operands". Array and map literals have
+  their own, smaller limit of 65535 elements or entries, so a map
+  literal is now bounded by that, or by the pool when its keys and
+  values are all distinct (two slots per entry).
 - **Jumps are 16-bit** (65535 bytes), as are array and map literal
   sizes.
 - **No garbage collector.** Reference cycles leak: a closure that
@@ -725,6 +829,9 @@ has no such checks; it finds out at run time ("Undefined variable
   (the class owns the method, which owns an upvalue back to the class;
   a global class naming itself is a global lookup and does not leak).
   Plain arrays, maps, instances and closures are freed normally.
+  Imported modules are never freed before the VM itself (the cache keeps
+  them), and each one carries its own copy of the standard library, a
+  few dozen natives, which is a small fixed cost per imported file.
 - **Very deep nesting overflows the C++ stack.** Printing, and
   eventually freeing, a nested array or map recurses once per level.
   Measured for arrays on an optimized build with an 8 MB stack: printing
@@ -763,6 +870,17 @@ the tests compare them line by line. What still differs:
   NaN, infinite or enormous array indexes and slice bounds are range
   errors; `sort` checks the whole array first, so a failed sort leaves
   it untouched, and puts NaN last.
+- **An error inside an imported file stops the whole program.** In the
+  tree-walker the imported file's own `interpret()` prints the error and
+  returns, so the import "succeeds" with whatever the file had defined
+  so far, the importer carries on, and the half-run module is cached.
+  The VM treats it like any other runtime error: the program stops. This
+  includes a circular import, which the tree-walker reports and then
+  continues past.
+- **A syntax error in an imported file** is reported by the compiler (the
+  same "Compile error at ..." lines) and then fails the import with
+  "Could not compile imported file 'path'.", a runtime error at the
+  `import` line.
 - **Limits the tree-walker does not have:** see "Known limits".
 
 ## How to run it
@@ -773,6 +891,6 @@ the tests compare them line by line. What still differs:
 ./mylang script.mylang           # tree-walking interpreter (full language, default)
 ```
 
-The two engines are completely independent — `--vm` is currently a
-small subset of the language; everything else still requires the
-default tree-walking interpreter.
+The two engines are completely independent. The VM now covers the whole
+language, including imports; the only differences are the ones listed
+under "Known differences from the tree-walker".

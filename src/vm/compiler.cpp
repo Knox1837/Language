@@ -39,6 +39,8 @@ std::shared_ptr<VMFunction> Compiler::compile(const std::string& source) {
 void Compiler::declaration() {
     if (match(TokenType::DEF)) {
         functionDeclaration();
+    } else if (match(TokenType::IMPORT)) {
+        importDeclaration();
     } else if (match(TokenType::CLASS)) {
         classDeclaration();
     } else if (match(TokenType::VAR)) {
@@ -57,7 +59,7 @@ void Compiler::functionDeclaration() {
     if (current_().scopeDepth > 0) {
         markInitialized();
     }
-    uint8_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
+    size_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
     functionBody(nameToken.lexeme, FunctionType::FUNCTION, "function");
 
@@ -103,9 +105,7 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
     functionStack.pop_back();
 
     // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
-    uint8_t functionConstant = makeConstant(VMValue{function});
-    emitByte(OpCode::OP_CLOSURE);
-    emitByte(functionConstant);
+    emitConstantOp(OpCode::OP_CLOSURE, makeConstant(VMValue{function}));
     for (const UpvalueInfo& upvalue : capturedUpvalues) {
         emitByte(upvalue.isLocal ? 1 : 0);
         emitByte(upvalue.index);
@@ -125,11 +125,10 @@ void Compiler::emitReturn() {
 void Compiler::classDeclaration() {
     consume(TokenType::IDENTIFIER, "Expect class name.");
     Token className = previous();
-    uint8_t nameConstant = identifierConstant(className);
+    size_t nameConstant = identifierConstant(className);
     declareVariable(className);
 
-    emitByte(OpCode::OP_CLASS);
-    emitByte(nameConstant);
+    emitConstantOp(OpCode::OP_CLASS, nameConstant);
     // Defined BEFORE the body is compiled, so methods can refer to their own class by name (for a global that's a global lookup at call time; for a local it's an upvalue).
     defineVariable(nameConstant);
 
@@ -168,14 +167,13 @@ void Compiler::classDeclaration() {
 void Compiler::method() {
     consume(TokenType::IDENTIFIER, "Expect method name.");
     Token name = previous();
-    uint8_t nameConstant = identifierConstant(name);
+    size_t nameConstant = identifierConstant(name);
 
     // Like the tree-walker, a method named "init" is the initializer, whatever else is going on.
     FunctionType type = (name.lexeme == "init") ? FunctionType::INITIALIZER : FunctionType::METHOD;
     functionBody(name.lexeme, type, "method"); // leaves the new closure on the stack
 
-    emitByte(OpCode::OP_METHOD);
-    emitByte(nameConstant);
+    emitConstantOp(OpCode::OP_METHOD, nameConstant);
 }
 
 void Compiler::varDeclaration() {
@@ -184,7 +182,7 @@ void Compiler::varDeclaration() {
 
     // For a LOCAL, declareVariable() records it in `locals` right away (before the initializer is compiled) 
     declareVariable(nameToken);
-    uint8_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
+    size_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
     if (match(TokenType::EQUAL)) {
         expression();
@@ -195,6 +193,21 @@ void Compiler::varDeclaration() {
 
     consume(TokenType::SEMICOLON, "Expect ';' after variable declaration.");
 
+    defineVariable(globalConstant);
+}
+
+void Compiler::importDeclaration() {
+    consume(TokenType::STRING, "Expect a string file path after 'import'.");
+    // OP_IMPORT is emitted right after the path so a runtime error (missing file, circular import) reports the line of the path, like the tree-walker.
+    emitConstantOp(OpCode::OP_IMPORT, makeConstant(VMValue{previous().lexeme}));
+
+    consume(TokenType::AS, "Expect 'as' after import path.");
+    consume(TokenType::IDENTIFIER, "Expect a name after 'as'.");
+    Token alias = previous();
+    consume(TokenType::SEMICOLON, "Expect ';' after import statement.");
+
+    declareVariable(alias); // a no-op at global scope; for a local, the pushed module object already sits in the slot it names
+    size_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(alias) : 0;
     defineVariable(globalConstant);
 }
 
@@ -222,13 +235,12 @@ void Compiler::markInitialized() {
     current_().locals.back().depth = current_().scopeDepth;
 }
 
-void Compiler::defineVariable(uint8_t globalConstant) {
+void Compiler::defineVariable(size_t globalConstant) {
     if (current_().scopeDepth > 0) {
         markInitialized();
         return;
     }
-    emitByte(OpCode::OP_DEFINE_GLOBAL);
-    emitByte(globalConstant);
+    emitConstantOp(OpCode::OP_DEFINE_GLOBAL, globalConstant);
 }
 
 int Compiler::resolveLocal(FunctionState& state, const Token& name) {
@@ -599,7 +611,8 @@ void Compiler::namedVariable(const Token& name, bool canAssign) {
     int localSlot = resolveLocal(current_(), name);
 
     OpCode getOp, setOp;
-    uint8_t operand;
+    size_t operand;           // a local/upvalue slot (one byte) or, for a global, a constant-pool index (may need OP_WIDE)
+    bool isGlobal = false;
     if (localSlot != -1) {
         getOp = OpCode::OP_GET_LOCAL;
         setOp = OpCode::OP_SET_LOCAL;
@@ -614,26 +627,31 @@ void Compiler::namedVariable(const Token& name, bool canAssign) {
             getOp = OpCode::OP_GET_GLOBAL;
             setOp = OpCode::OP_SET_GLOBAL;
             operand = identifierConstant(name);
+            isGlobal = true;
         }
     }
+    auto emitOp = [&](OpCode op) {
+        if (isGlobal) {
+            emitConstantOp(op, operand);
+        } else {
+            emitByte(op);
+            emitByte(static_cast<uint8_t>(operand));
+        }
+    };
 
     OpCode compoundOp = OpCode::OP_ADD; // only meaningful when compoundAssignOp() returns true below
     if (canAssign && match(TokenType::EQUAL)) {
         expression();
-        emitByte(setOp);
-        emitByte(operand);
+        emitOp(setOp);
     } else if (canAssign && compoundAssignOp(peek().type, compoundOp)) {
         // "x op= value" means "x = x op value": read x, evaluate value, apply op, store back.
         advance();
-        emitByte(getOp);
-        emitByte(operand);
+        emitOp(getOp);
         expression();
         emitByte(compoundOp);
-        emitByte(setOp);
-        emitByte(operand);
+        emitOp(setOp);
     } else {
-        emitByte(getOp);
-        emitByte(operand);
+        emitOp(getOp);
     }
 }
 
@@ -661,12 +679,11 @@ void Compiler::superExpr(bool) {
     }
     consume(TokenType::DOT, "Expect '.' after 'super'.");
     consume(TokenType::IDENTIFIER, "Expect superclass method name.");
-    uint8_t nameConstant = identifierConstant(previous());
+    size_t nameConstant = identifierConstant(previous());
 
     namedVariable(Token(TokenType::THIS, "this", keyword.line), false);   // the receiver ...
     namedVariable(Token(TokenType::SUPER, "super", keyword.line), false); // ... and the superclass of the class this code was written in
-    emitByte(OpCode::OP_GET_SUPER);
-    emitByte(nameConstant);
+    emitConstantOp(OpCode::OP_GET_SUPER, nameConstant);
 }
 
 uint8_t Compiler::argumentList() {
@@ -747,38 +764,34 @@ void Compiler::index(bool canAssign) {
 
 void Compiler::dot(bool canAssign) {
     consume(TokenType::IDENTIFIER, "Expect property name after '.'.");
-    uint8_t nameConstant = identifierConstant(previous());
+    size_t nameConstant = identifierConstant(previous());
 
     OpCode compoundOp = OpCode::OP_ADD; // only meaningful when compoundAssignOp() returns true below
     if (canAssign && match(TokenType::EQUAL)) {
         // The tree-walker checks that the object can hold fields BEFORE evaluating the right side, so a bad target must fail before the right side's side effects.
         emitByte(OpCode::OP_CHECK_FIELDS);
         expression();
-        emitByte(OpCode::OP_SET_PROPERTY);
-        emitByte(nameConstant);
+        emitConstantOp(OpCode::OP_SET_PROPERTY, nameConstant);
     } else if (canAssign && compoundAssignOp(peek().type, compoundOp)) {
         // "obj.x op= v": like a[i] += v, the object must be evaluated ONCE, so duplicate it instead of naming it twice.
         advance();
         emitByte(OpCode::OP_CHECK_FIELDS);
         emitByte(OpCode::OP_DUP);          // [obj]      -> [obj obj]
-        emitByte(OpCode::OP_GET_PROPERTY); // [obj obj]  -> [obj current]
-        emitByte(nameConstant);
+        emitConstantOp(OpCode::OP_GET_PROPERTY, nameConstant); // [obj obj]  -> [obj current]
         expression();                      //            -> [obj current v]
         emitByte(compoundOp);              //            -> [obj result]
-        emitByte(OpCode::OP_SET_PROPERTY); //            -> [result]
-        emitByte(nameConstant);
+        emitConstantOp(OpCode::OP_SET_PROPERTY, nameConstant); //            -> [result]
     } else {
-        emitByte(OpCode::OP_GET_PROPERTY);
-        emitByte(nameConstant);
+        emitConstantOp(OpCode::OP_GET_PROPERTY, nameConstant);
     }
 }
 
-uint8_t Compiler::identifierConstant(const Token& name) {
+size_t Compiler::identifierConstant(const Token& name) {
     // Reuses the same constant pool OP_CONSTANT already draws from. a variable's name is stored as a VMValue string, exactly like a number literal is stored as a VMValue double.
     return makeConstant(VMValue{name.lexeme});
 }
 
-uint8_t Compiler::makeConstant(VMValue value) {
+size_t Compiler::makeConstant(VMValue value) {
     int index = currentChunk().addConstant(std::move(value));
     if (index < 0) {
         if (!current_().reportedConstantOverflow) {
@@ -787,7 +800,7 @@ uint8_t Compiler::makeConstant(VMValue value) {
         }
         return 0;
     }
-    return static_cast<uint8_t>(index);
+    return static_cast<size_t>(index);
 }
 
 // parse rule table
@@ -903,9 +916,19 @@ void Compiler::emitByte(OpCode op) {
 }
 
 void Compiler::emitConstant(VMValue value) {
-    uint8_t index = makeConstant(std::move(value));
-    emitByte(OpCode::OP_CONSTANT);
-    emitByte(index);
+    emitConstantOp(OpCode::OP_CONSTANT, makeConstant(std::move(value)));
+}
+
+void Compiler::emitConstantOp(OpCode op, size_t constantIndex) {
+    if (constantIndex <= 0xFF) {
+        emitByte(op);
+        emitByte(static_cast<uint8_t>(constantIndex));
+    } else {
+        emitByte(OpCode::OP_WIDE); // tells the VM the operand of the NEXT instruction is 2 bytes
+        emitByte(op);
+        emitByte(static_cast<uint8_t>((constantIndex >> 8) & 0xFF)); // big-endian, like jump offsets
+        emitByte(static_cast<uint8_t>(constantIndex & 0xFF));
+    }
 }
 
 size_t Compiler::emitJump(OpCode jumpOp) {
