@@ -1,9 +1,11 @@
-# mylang — Bytecode VM Notes
+# mylang - Bytecode VM Notes
 
-Status: in progress. This documents the VM's internal design, separate
-from `language-spec.md` (which documents the LANGUAGE — the VM is
-purely an alternate execution engine for the same language, invisible
-to anyone writing `.mylang` scripts once it's complete).
+Status: the VM covers the whole language (closures, classes, arrays, maps,
+imports, the standard library) and has a cycle collector. This documents the
+VM's internal design, separate from `language_spec.md` (which documents the
+LANGUAGE — the VM is purely an alternate execution engine for the same
+language, invisible to anyone writing `.mylang` scripts apart from the
+differences listed under "Known differences from the tree-walker").
 
 ## Why a second execution engine
 

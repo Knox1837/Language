@@ -1,8 +1,11 @@
-# mylang — Language Specification
+# mylang - Language Specification
 
 Status: living document. Update this whenever a language feature changes.
-Currently covers: lexer, parser, tree-walking interpreter, functions &
-closures, classes, inheritance, standard library, arrays, maps, imports.
+Currently covers: lexer, parser, functions & closures, classes,
+inheritance, standard library, arrays, maps, imports. Everything here is
+implemented by both execution engines (the tree-walking interpreter and the
+bytecode VM, `--vm`); the few places where the VM differs are listed in
+`docs/vm_notes.md`.
 
 ## Overview
 
@@ -23,7 +26,7 @@ class     this      super     import    as
 | Type   | Example        | Notes |
 |--------|----------------|-------|
 | number | `10`, `3.14`   | always stored as double-precision float internally |
-| string | `"hello"`      | double-quoted only |
+| string | `"hello"`      | double-quoted only. There are no escape sequences: the text between the quotes is taken literally, so `"a\nb"` is the four characters `a`, `\`, `n`, `b`, and a string cannot contain a `"` |
 | bool   | `true`, `false`| |
 | nil    | `nil`          | absence of a value; also the default for `var x;` with no initializer, and for a function with no `return` |
 | function | `def f() {}` | first-class: can be assigned, passed, and returned |
@@ -416,8 +419,14 @@ globally in every script — no import needed.
 | `isFunction(x)` | any → bool | true for both user-defined functions AND classes (a class is callable — calling it constructs an instance) |
 
 Native functions raise the same `RuntimeError` mechanism as the rest of
-the interpreter, but since they aren't tied to a specific AST node, their
-error messages report line `0` rather than the calling line.
+the interpreter, but since they aren't tied to a specific AST node, the
+tree-walking interpreter reports their errors at line `0` rather than the
+calling line (the VM reports the line of the call).
+
+**VM-only functions:** `gc()` runs the garbage collector and returns how many
+objects it freed, and `heapSize()` returns how many heap objects exist. They
+exist so scripts and tests can observe the collector; the tree-walking
+interpreter does not define them.
 
 ## Error handling
 
@@ -432,6 +441,26 @@ error messages report line `0` rather than the calling line.
 
 ## Not yet implemented
 
-- Non-string map keys
-- Per-file-relative import path resolution (currently all imports resolve against the top-level script's directory — see Imports section above)
-- Bytecode VM (current implementation is a tree-walking interpreter)
+Each of these was checked against both engines. A script that uses one gets
+a parse error, or "Undefined variable" for the names that are not keywords.
+
+- **`break` and `continue`:** loops end only through their condition or a
+  `return`. (They are not keywords, so `break;` is read as a variable named
+  `break` and fails with "Undefined variable 'break'".)
+- **String escape sequences** (`\n`, `\t`, `\"`, `\\`): see the string row in
+  the data-types table.
+- **Function expressions / lambdas:** functions can only be declared with
+  `def name(...) { ... }`, so there is no anonymous function to pass to a
+  helper like `map` or `filter`, and `sort` takes no comparator.
+- **Raising and handling errors from a script:** no `try`/`catch`, no
+  `error(...)` function. Every runtime error stops the program.
+- **File I/O:** no way to read or write a file from a script (`input()` reads
+  standard input only).
+- **Non-string map keys** (map literals and `m[k]` accept strings only).
+- **Per-file-relative import path resolution** (currently all imports resolve
+  against the top-level script's directory — see Imports section above).
+- **Operators and syntax:** no `?:` conditional, no `++`/`--`, no
+  `for x in collection` loop, no string indexing (`s[i]`; use `charAt`), and no
+  block comments (`/* ... */`; `//` line comments work).
+- **Number formatting:** `print` shows whole numbers as integers and any other
+  number with six decimal places (`3.14` prints as `3.140000`).

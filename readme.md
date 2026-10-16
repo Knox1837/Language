@@ -1,8 +1,8 @@
 # mylang
 
 A dynamically-typed, interpreted scripting language built from scratch
-in C++ — plus an in-progress bytecode VM as a second, faster execution
-engine for the same language.
+in C++, with two execution engines for the same language: a
+tree-walking interpreter and a bytecode VM.
 
 ## System workflow
 
@@ -23,6 +23,9 @@ flowchart TD
     J --> K["Bytecode Chunk<br/>(src/vm/chunk.cpp)"]
     K --> L["VM execution loop<br/>(src/vm/vm.cpp)"]
     L --> G
+    L -.uses.-> N["VM Standard Library<br/>(src/vm/vm_*lib.cpp)"]
+    L -.imports.-> O["Modules<br/>(src/vm/vm_module.h)"]
+    L -.frees cycles.-> P["Cycle collector<br/>(src/vm/gc.cpp)"]
 
     style F fill:#2d5,color:#000
     style L fill:#58c,color:#fff
@@ -31,38 +34,46 @@ flowchart TD
 Two independent execution paths share the same `Lexer`/`Token` front
 end, then diverge:
 
-- **Tree-walking interpreter** (default) — full language support:
-  functions/closures, classes/inheritance, arrays, maps, imports, and
-  the whole standard library. `./mylang script.mylang`
-- **Bytecode VM** (`--vm` flag, in progress) — compiles to a flat
-  instruction stream and runs it on a stack-based loop instead of
-  walking the AST. Currently supports: arithmetic, `print`, global and
-  local variables with block scoping. `./mylang --vm script.mylang`
+- **Tree-walking interpreter** (default) — the reference for the
+  language's behavior: functions/closures, classes/inheritance, arrays,
+  maps, imports, and the whole standard library.
+  `./mylang script.mylang`
+- **Bytecode VM** (`--vm` flag) — compiles to a flat instruction stream
+  and runs it on a stack-based loop instead of walking the AST. It
+  supports the whole language the interpreter does (closures, classes
+  with inheritance, arrays, maps, imports, the standard library), and
+  adds a cycle collector so reference cycles (a closure that captures
+  itself, an array that contains itself) are freed. The few places where
+  it differs from the interpreter are listed in `docs/vm_notes.md`.
+  `./mylang --vm script.mylang`
 
-See `docs/vm-notes.md` for why there are two engines and how the VM is
-being built out incrementally.
+See `docs/vm_notes.md` for why there are two engines and how the VM
+works.
 
 ## Build
 
-**With g++ directly:**
+**With g++ directly** (Linux/macOS, or Git Bash on Windows; this compiles
+every `.cpp` under `src/`, so it never goes out of date when a file is added):
 ```bash
-g++ -std=c++17 -Isrc src/main.cpp src/lexer/lexer.cpp src/parser/parser.cpp src/interpreter/environment.cpp src/interpreter/interpreter.cpp src/interpreter/user_function.cpp src/interpreter/value.cpp src/interpreter/lox_class.cpp src/interpreter/lox_instance.cpp src/interpreter/array_methods.cpp src/interpreter/map_methods.cpp src/interpreter/module_object.cpp src/interpreter/module_loader.cpp src/stdlib/native_function.cpp src/stdlib/math_lib.cpp src/stdlib/string_lib.cpp src/stdlib/io_lib.cpp src/stdlib/array_lib.cpp src/stdlib/type_lib.cpp src/stdlib/map_lib.cpp src/stdlib/stdlib.cpp src/vm/chunk.cpp src/vm/compiler.cpp src/vm/vm.cpp -o mylang
+g++ -std=c++17 -O2 -Isrc $(find src -name '*.cpp') -o mylang
 ```
 
-**With CMake:**
+**With CMake** (the way to build on Windows with MSVC):
 ```bash
 cmake -B build
 cmake --build build
 ```
+The source files are listed explicitly in `CMakeLists.txt`: when you add a
+`.cpp` file, add it there too and re-run `cmake -B build`.
 
 ## Run
 
-**Tree-walking interpreter (default, full language support):**
+**Tree-walking interpreter (default):**
 ```bash
 ./mylang path/to/script.mylang
 ```
 
-**Bytecode VM (in progress):**
+**Bytecode VM:**
 ```bash
 ./mylang --vm path/to/script.mylang
 ./mylang --vm          # VM REPL
@@ -70,5 +81,7 @@ cmake --build build
 
 ## Docs
 
-See `docs/language-spec.md` for the language grammar/semantics, and
-`docs/vm-notes.md` for the bytecode VM's design and current status.
+See `docs/language_spec.md` for the language grammar/semantics (including
+the list of features that are not implemented yet), and `docs/vm_notes.md`
+for the bytecode VM's design, its differences from the interpreter, and its
+limits.
