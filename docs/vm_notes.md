@@ -1,4 +1,4 @@
-# mylang — Bytecode VM Notes
+# mylang: Bytecode VM Notes
 
 Status: in progress. This documents the VM's internal design, separate
 from `language-spec.md` (which documents the LANGUAGE — the VM is
@@ -956,12 +956,6 @@ the tests compare them line by line. What still differs:
   tree-walker accepts: in `{ var a = a; }` the tree-walker reads the
   OUTER `a`, while the VM reports "Cannot read a local variable in its
   own initializer.".
-- **Type-error wording for operators other than `+`:** the VM says
-  "Operands to '-' must be numbers." (likewise `*`, `/`, `%`, `<`, `>`)
-  and "Operand to unary '-' must be a number."; the tree-walker says
-  "Operands must be numbers." and "Operand must be a number.". Because
-  the compiler builds `<=` and `>=` from `>` and `<` plus a negation,
-  their errors name that underlying operator.
 - **Compile-error reporting:** the VM prints "Compile error at ..."
   where the tree-walker prints "Error at ...", and the VM compiler has
   no panic mode, so one syntax error can be followed by several

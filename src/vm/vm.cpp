@@ -99,11 +99,9 @@ const VMValue& VM::peekStack(int distanceFromTop) const {
     return stack[stack.size() - 1 - distanceFromTop];
 }
 
-bool VM::requireNumbers(const VMValue& a, const VMValue& b, const char* opName) {
+bool VM::requireNumbers(const VMValue& a, const VMValue& b) {
     if (isVMNumber(a) && isVMNumber(b)) return true;
-    std::ostringstream msg;
-    msg << "Operands to '" << opName << "' must be numbers.";
-    runtimeError(msg.str());
+    runtimeError("Operands must be numbers.");
     return false;
 }
 
@@ -272,21 +270,21 @@ InterpretResult VM::run() {
             case OpCode::OP_SUBTRACT: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, "-")) return InterpretResult::RUNTIME_ERROR;
+                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
                 push(asVMNumber(a) - asVMNumber(b));
                 break;
             }
             case OpCode::OP_MULTIPLY: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, "*")) return InterpretResult::RUNTIME_ERROR;
+                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
                 push(asVMNumber(a) * asVMNumber(b));
                 break;
             }
             case OpCode::OP_DIVIDE: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, "/")) return InterpretResult::RUNTIME_ERROR;
+                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
                 if (asVMNumber(b) == 0.0) {
                     runtimeError("Division by zero.");
                     return InterpretResult::RUNTIME_ERROR;
@@ -297,7 +295,7 @@ InterpretResult VM::run() {
             case OpCode::OP_MODULO: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, "%")) return InterpretResult::RUNTIME_ERROR;
+                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
                 if (asVMNumber(b) == 0.0) {
                     runtimeError("Modulo by zero.");
                     return InterpretResult::RUNTIME_ERROR;
@@ -309,7 +307,7 @@ InterpretResult VM::run() {
             case OpCode::OP_NEGATE: {
                 VMValue a = pop();
                 if (!isVMNumber(a)) {
-                    runtimeError("Operand to unary '-' must be a number.");
+                    runtimeError("Operand must be a number.");
                     return InterpretResult::RUNTIME_ERROR;
                 }
                 push(-asVMNumber(a));
@@ -385,14 +383,14 @@ InterpretResult VM::run() {
             case OpCode::OP_GREATER: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, ">")) return InterpretResult::RUNTIME_ERROR;
+                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
                 push(asVMNumber(a) > asVMNumber(b));
                 break;
             }
             case OpCode::OP_LESS: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b, "<")) return InterpretResult::RUNTIME_ERROR;
+                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
                 push(asVMNumber(a) < asVMNumber(b));
                 break;
             }
