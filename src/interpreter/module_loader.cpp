@@ -1,4 +1,4 @@
-// module_loader.cpp — reads, parses, and runs an imported file in a completely fresh Interpreter (its own global scope + its own stdlib registration)
+// module_loader.cpp: reads, parses, and runs an imported file in a completely fresh Interpreter (its own global scope + its own stdlib registration)
 
 #include "module_loader.h"
 #include "environment.h" // for RuntimeError
@@ -17,10 +17,7 @@ std::string ModuleLoader::resolvePath(const std::string& path) const {
     fs::path p(path);
     fs::path resolved = p.is_absolute() ? p : fs::path(baseDir) / p;
 
-    // weakly_canonical normalizes ".."/"." segments without requiring the
-    // file to already exist (plain canonical() would throw if it doesn't) —
-    // this keeps cache keys consistent even before we've confirmed the
-    // file is actually readable.
+    // weakly_canonical normalizes ".."/"." segments without requiring the file to already exist (plain canonical() would throw if it doesn't) this keeps cache keys consistent even before we've confirmed the file is actually readable.
     std::error_code ec;
     fs::path canonical = fs::weakly_canonical(resolved, ec);
     return ec ? resolved.string() : canonical.string();
@@ -52,11 +49,17 @@ Value ModuleLoader::load(const std::string& path, const Token& importToken, Inte
 
     Parser parser(tokens);
     moduleStatements.push_back(parser.parse());
-    // NOTE: moduleStatements.back() is a vector of StmtPtr, which are smart pointers to the AST nodes. 
-    // We keep this vector alive for the lifetime of the program to ensure that any functions or closures defined in the imported module can still reference their AST nodes.
+    // moduleStatements.back() is a vector of StmtPtr, which are smart pointers to the AST nodes. We keep this vector alive for the lifetime of the program to ensure that any functions or closures defined in the imported module can still reference their AST nodes.
     Interpreter moduleInterpreter;
     moduleInterpreter.setSharedModuleLoader(shared_from_this());
-    moduleInterpreter.interpret(moduleStatements.back());
+    try {
+        // run(), not interpret(): a runtime error inside the file must reach the importer and stop the program, not be printed here and swallowed (which used to leave a half-run module in the cache and let the importer carry on).
+        moduleInterpreter.run(moduleStatements.back());
+    } catch (const RuntimeError&) {
+        // The file did not finish loading: it is not cached, and it is no longer "currently loading", so a later import of it (the REPL carries on after an error) runs it again instead of being reported as circular.
+        currentlyLoading.erase(resolved);
+        throw;
+    }
 
     Value moduleValue = std::make_shared<ModuleObject>(moduleInterpreter.getGlobalEnvironment());
 

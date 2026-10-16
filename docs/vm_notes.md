@@ -1,4 +1,4 @@
-# mylang: Bytecode VM Notes
+# mylang — Bytecode VM Notes
 
 Status: in progress. This documents the VM's internal design, separate
 from `language-spec.md` (which documents the LANGUAGE — the VM is
@@ -858,7 +858,10 @@ stack (a chain of 300 files was tested).
   in the tree-walker.
 - The cache (`moduleCache`) is filled when a file FINISHES loading, so a
   file that fails half way is not cached and is run again by a later
-  import.
+  import. A runtime error inside an imported file stops the program, in
+  both engines (the tree-walker used to print it and carry on, with the
+  half-run module cached; it now behaves like the VM, which is also what
+  a circular import does).
 - `currentlyLoading` holds the files whose top-level code is running; an
   import of one of them is "Circular import detected for 'path'.".
   `interpret()` clears the set, because a runtime error unwinds every
@@ -970,13 +973,6 @@ the tests compare them line by line. What still differs:
   NaN, infinite or enormous array indexes and slice bounds are range
   errors; `sort` checks the whole array first, so a failed sort leaves
   it untouched, and puts NaN last.
-- **An error inside an imported file stops the whole program.** In the
-  tree-walker the imported file's own `interpret()` prints the error and
-  returns, so the import "succeeds" with whatever the file had defined
-  so far, the importer carries on, and the half-run module is cached.
-  The VM treats it like any other runtime error: the program stops. This
-  includes a circular import, which the tree-walker reports and then
-  continues past.
 - **A syntax error in an imported file** is reported by the compiler (the
   same "Compile error at ..." lines) and then fails the import with
   "Could not compile imported file 'path'.", a runtime error at the

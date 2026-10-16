@@ -30,12 +30,16 @@ void Interpreter::setSharedModuleLoader(std::shared_ptr<ModuleLoader> loader) {
     moduleLoader = std::move(loader);
 }
 
+void Interpreter::run(const std::vector<StmtPtr>& statements) {
+    for (const auto& stmt : statements) {
+        if (!stmt) continue; // a failed declaration() during parsing leaves a null entry
+        execute(*stmt);
+    }
+}
+
 void Interpreter::interpret(const std::vector<StmtPtr>& statements) {
     try {
-        for (const auto& stmt : statements) {
-            if (!stmt) continue; // a failed declaration() during parsing leaves a null entry
-            execute(*stmt);
-        }
+        run(statements);
     } catch (const RuntimeError& error) {
         std::cerr << "[line " << error.token.line << "] Runtime error: " << error.what() << "\n";
     }

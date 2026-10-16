@@ -323,6 +323,11 @@ print math.PI_APPROX;      // 3.14
   except through the module object's namespace.
 - **Circular imports** (file A imports B, which imports A) are detected
   and reported as a runtime error rather than infinite-looping.
+- **Errors inside an imported file** are ordinary runtime errors: the
+  error is reported with the line it happened on (inside the imported
+  file) and the whole program stops, exactly as if it had happened in
+  the importing script. A file that fails part-way is not cached, so
+  importing it again (for example on a later REPL line) runs it again.
 - **Path resolution (first-pass design)**: relative import paths always
   resolve against the **top-level script's** directory — including
   `import` statements written inside an already-imported file. This is

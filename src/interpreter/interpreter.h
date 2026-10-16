@@ -30,6 +30,9 @@ public:
     // Catches RuntimeError internally and reports it, matching how a real script runner behaves (one runtime error stops execution and prints it).
     void interpret(const std::vector<StmtPtr>& statements);
 
+    // Like interpret(), but lets a RuntimeError escape instead of printing it. ModuleLoader uses this to run an imported file, so that an error inside the file stops the whole program (it travels up through the `import` statement to the top-level interpret(), which reports it once) instead of being printed and swallowed while the importer carries on.
+    void run(const std::vector<StmtPtr>& statements);
+
     // Runs `statements` in a fresh scope chained to `newEnv`'s parent chain.
     // Public because UserFunction::call() needs it to run a function body
     // in a scope chained to the function's closure, not the caller's scope.
