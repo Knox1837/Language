@@ -8,6 +8,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
     {"true", TokenType::TRUE}, {"false", TokenType::FALSE},
     {"nil", TokenType::NIL}, {"for", TokenType::FOR},
     {"while", TokenType::WHILE}, {"def", TokenType::DEF},
+    {"break", TokenType::BREAK}, {"continue", TokenType::CONTINUE},
     {"return", TokenType::RETURN}, {"var", TokenType::VAR},
     {"print", TokenType::PRINT}, {"class", TokenType::CLASS}, {"this", TokenType::THIS},
     {"super", TokenType::SUPER},

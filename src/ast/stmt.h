@@ -14,6 +14,8 @@ struct FunctionStmt;
 struct ReturnStmt;
 struct ClassStmt;
 struct ImportStmt;
+struct BreakStmt;
+struct ContinueStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -26,6 +28,8 @@ struct StmtVisitor {
     virtual void visitReturnStmt(ReturnStmt& stmt) = 0;
     virtual void visitClassStmt(ClassStmt& stmt) = 0;
     virtual void visitImportStmt(ImportStmt& stmt) = 0;
+    virtual void visitBreakStmt(BreakStmt& stmt) = 0;
+    virtual void visitContinueStmt(ContinueStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -78,11 +82,13 @@ struct IfStmt : Stmt {
 };
 
 // while (condition) body
+// A `for` loop is a WhileStmt with an `increment`: that clause runs after the body on every iteration, INCLUDING an iteration the body ended with `continue`, which is why it is kept apart from the body instead of being appended to it. A plain `while` has no increment.
 struct WhileStmt : Stmt {
     ExprPtr condition;
     StmtPtr body;
-    WhileStmt(ExprPtr condition, StmtPtr body)
-        : condition(std::move(condition)), body(std::move(body)) {}
+    ExprPtr increment; // nullptr for a plain while loop
+    WhileStmt(ExprPtr condition, StmtPtr body, ExprPtr increment = nullptr)
+        : condition(std::move(condition)), body(std::move(body)), increment(std::move(increment)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitWhileStmt(*this); }
 };
 
@@ -121,4 +127,18 @@ struct ImportStmt : Stmt {
     Token alias; // the IDENTIFIER after "as" — what the module is bound to locally
     ImportStmt(Token path, Token alias) : path(std::move(path)), alias(std::move(alias)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitImportStmt(*this); }
+};
+
+// break;   (only valid inside a loop; the parser rejects it anywhere else)
+struct BreakStmt : Stmt {
+    Token keyword; // the "break" token, kept for line-number reporting
+    explicit BreakStmt(Token keyword) : keyword(std::move(keyword)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitBreakStmt(*this); }
+};
+
+// continue;   (only valid inside a loop; the parser rejects it anywhere else)
+struct ContinueStmt : Stmt {
+    Token keyword;
+    explicit ContinueStmt(Token keyword) : keyword(std::move(keyword)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitContinueStmt(*this); }
 };

@@ -159,8 +159,16 @@ void ASTPrinter::visitWhileStmt(WhileStmt& stmt) {
     std::ostringstream out;
     out << "(while " << print(*stmt.condition);
     stmt.body->accept(*this);
-    out << " " << result << ")";
+    out << " " << result;
+    if (stmt.increment) out << " (increment " << print(*stmt.increment) << ")";
+    out << ")";
     result = out.str();
+}
+void ASTPrinter::visitBreakStmt(BreakStmt&) {
+    result = "(break)";
+}
+void ASTPrinter::visitContinueStmt(ContinueStmt&) {
+    result = "(continue)";
 }
 
 void ASTPrinter::visitFunctionStmt(FunctionStmt& stmt) {

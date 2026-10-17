@@ -39,6 +39,16 @@
 
 Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
 
+namespace {
+// Sets a counter for the lifetime of one scope and puts the old value back on the way out, including when a ParseError unwinds through it. Without this, an error in a loop body would leave the loop depth raised and a later `break` outside any loop would be wrongly accepted.
+struct DepthGuard {
+    int& counter;
+    int saved;
+    DepthGuard(int& counter, int value) : counter(counter), saved(counter) { counter = value; }
+    ~DepthGuard() { counter = saved; }
+};
+} // namespace
+
 std::vector<StmtPtr> Parser::parse() {
     std::vector<StmtPtr> statements;
     while (!isAtEnd()) {
@@ -106,6 +116,7 @@ std::unique_ptr<FunctionStmt> Parser::functionBody(const std::string& kind) {
     consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
 
     consume(TokenType::LEFT_BRACE, "Expect '{' before " + kind + " body.");
+    DepthGuard noLoop(loopDepth, 0); // a loop outside this function does not make `break` legal inside it
     std::vector<StmtPtr> body = block();
 
     return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(body));
@@ -133,6 +144,8 @@ StmtPtr Parser::statement() {
     if (match({TokenType::WHILE})) return whileStatement();
     if (match({TokenType::FOR})) return forStatement();
     if (match({TokenType::RETURN})) return returnStatement();
+    if (match({TokenType::BREAK})) return breakStatement();
+    if (match({TokenType::CONTINUE})) return continueStatement();
     if (match({TokenType::LEFT_BRACE})) {
         return std::make_unique<BlockStmt>(block());
     }
@@ -163,7 +176,11 @@ StmtPtr Parser::whileStatement() {
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'while'.");
     ExprPtr condition = expression();
     consume(TokenType::RIGHT_PAREN, "Expect ')' after while condition.");
-    StmtPtr body = statement();
+    StmtPtr body;
+    {
+        DepthGuard inLoop(loopDepth, loopDepth + 1);
+        body = statement();
+    }
     return std::make_unique<WhileStmt>(std::move(condition), std::move(body));
 }
 
@@ -192,21 +209,18 @@ StmtPtr Parser::forStatement() {
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
 
-    StmtPtr body = statement();
-
-    // Splice the increment onto the end of the body, if present.
-    if (increment != nullptr) {
-        std::vector<StmtPtr> bodyStatements;
-        bodyStatements.push_back(std::move(body));
-        bodyStatements.push_back(std::make_unique<ExpressionStmt>(std::move(increment)));
-        body = std::make_unique<BlockStmt>(std::move(bodyStatements));
+    StmtPtr body;
+    {
+        DepthGuard inLoop(loopDepth, loopDepth + 1);
+        body = statement();
     }
 
     // No condition means an infinite loop, same as C's "for (;;)".
     if (condition == nullptr) {
         condition = std::make_unique<Literal>(LiteralValue{true});
     }
-    body = std::make_unique<WhileStmt>(std::move(condition), std::move(body));
+    // The increment is NOT appended to the body: `continue` skips the rest of the body, and the increment must still run. WhileStmt runs it after the body on every iteration (and not after a `break`).
+    body = std::make_unique<WhileStmt>(std::move(condition), std::move(body), std::move(increment));
 
     // Prepend the initializer, if present, in its own enclosing block so the
     // loop variable's scope is limited to the loop itself.
@@ -228,6 +242,27 @@ StmtPtr Parser::returnStatement() {
     }
     consume(TokenType::SEMICOLON, "Expect ';' after return value.");
     return std::make_unique<ReturnStmt>(std::move(keyword), std::move(value));
+}
+
+StmtPtr Parser::breakStatement() {
+    Token keyword = previous();
+    consume(TokenType::SEMICOLON, "Expect ';' after 'break'.");
+    if (loopDepth == 0) {
+        // Reported but NOT thrown: unwinding would make synchronize() skip tokens (including the closing brace of the enclosing block) and produce a second, confusing error. An empty block takes the statement's place, so a surrounding `if` or loop body is never null.
+        error(keyword, "Can't use 'break' outside of a loop.");
+        return std::make_unique<BlockStmt>(std::vector<StmtPtr>{});
+    }
+    return std::make_unique<BreakStmt>(std::move(keyword));
+}
+
+StmtPtr Parser::continueStatement() {
+    Token keyword = previous();
+    consume(TokenType::SEMICOLON, "Expect ';' after 'continue'.");
+    if (loopDepth == 0) {
+        error(keyword, "Can't use 'continue' outside of a loop."); // reported, not thrown: see breakStatement()
+        return std::make_unique<BlockStmt>(std::vector<StmtPtr>{});
+    }
+    return std::make_unique<ContinueStmt>(std::move(keyword));
 }
 
 StmtPtr Parser::expressionStatement() {

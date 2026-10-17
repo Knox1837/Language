@@ -61,6 +61,7 @@ void Interpreter::executeBlock(const std::vector<StmtPtr>& statements, std::shar
         for (const auto& stmt : statements) {
             if (!stmt) continue;
             execute(*stmt);
+            if (loopSignal != LoopSignal::NONE) break; // a `break`/`continue` ran: skip the rest of this block, leave the loop to the caller
         }
     } catch (...) {
         environment = previous; // restore scope even if a runtime error/return propagates
@@ -306,13 +307,23 @@ void Interpreter::visitIfStmt(IfStmt& stmt) {
 void Interpreter::visitWhileStmt(WhileStmt& stmt) {
     while (isTruthy(evaluate(*stmt.condition))) {
         execute(*stmt.body);
+        if (loopSignal == LoopSignal::BREAK) {
+            loopSignal = LoopSignal::NONE;
+            break; // leave the loop without running the increment
+        }
+        loopSignal = LoopSignal::NONE; // CONTINUE (or nothing): carry on with the next iteration
+        if (stmt.increment) evaluate(*stmt.increment); // a for-loop's increment runs after every iteration, including one ended by `continue`
     }
+}
+void Interpreter::visitBreakStmt(BreakStmt&) {
+    loopSignal = LoopSignal::BREAK;
+}
+void Interpreter::visitContinueStmt(ContinueStmt&) {
+    loopSignal = LoopSignal::CONTINUE;
 }
 
 void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
-    // Capture the CURRENT environment as the closure — this is what lets
-    // the function later see variables from its defining scope even if
-    // called from somewhere else entirely.
+    // Capture the CURRENT environment as the closure — this is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
     auto function = std::make_shared<UserFunction>(&stmt, environment);
     environment->define(stmt.name.lexeme, function);
 }

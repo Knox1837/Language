@@ -41,6 +41,8 @@ public:
     void visitReturnStmt(ReturnStmt& stmt) override;
     void visitClassStmt(ClassStmt& stmt) override;
     void visitImportStmt(ImportStmt& stmt) override;
+    void visitBreakStmt(BreakStmt& stmt) override;
+    void visitContinueStmt(ContinueStmt& stmt) override;
 
 private:
     std::string result; // visit methods write here; print() reads it back out

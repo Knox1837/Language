@@ -22,6 +22,7 @@ public:
 private:
     std::vector<Token> tokens;
     int current = 0;
+    int loopDepth = 0; // how many loop BODIES enclose the current position inside the current function; 0 means `break`/`continue` are not allowed here
 
     // statement grammar rules
     StmtPtr declaration();      // "class" decl, "def" function, "var" declaration, or falls through to statement()
@@ -36,6 +37,8 @@ private:
     StmtPtr whileStatement();   // "while" "(" expression ")" statement
     StmtPtr forStatement();     // "for" "(" (varDecl|exprStmt|";") expression? ";" expression? ")" statement -- desugars to a whileStmt
     StmtPtr returnStatement();  // "return" expression? ";"
+    StmtPtr breakStatement();   // "break" ";"     -- only inside a loop
+    StmtPtr continueStatement(); // "continue" ";" -- only inside a loop
     StmtPtr expressionStatement(); // expression ";"
     std::vector<StmtPtr> block();  // "{" declaration* "}"
 
