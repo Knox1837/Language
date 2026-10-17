@@ -331,6 +331,10 @@ void Compiler::statement() {
         whileStatement();
     } else if (match(TokenType::FOR)) {
         forStatement();
+    } else if (match(TokenType::BREAK)) {
+        breakStatement();
+    } else if (match(TokenType::CONTINUE)) {
+        continueStatement();
     } else if (match(TokenType::LEFT_BRACE)) {
         beginScope();
         block();
@@ -407,11 +411,19 @@ void Compiler::whileStatement() {
 
     size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
     emitByte(OpCode::OP_POP); // discard the (truthy) condition before running the body
+
+    current_().loops.push_back(LoopInfo{current_().scopeDepth, loopStart, {}});
     statement();
+    LoopInfo loop = std::move(current_().loops.back()); // by value: compiling the body may have grown functionStack, so no reference is held across it
+    current_().loops.pop_back();
+
     emitLoop(loopStart); // jump BACK to re-check the condition
 
     patchJump(exitJump);
     emitByte(OpCode::OP_POP); // discard the (falsey) condition that caused the loop to exit
+
+    // `break` lands here: after the condition has been discarded, because a break happens inside the body, where the condition was already popped.
+    for (size_t breakJump : loop.breakJumps) patchJump(breakJump);
 }
 
 void Compiler::forStatement() {
@@ -459,13 +471,22 @@ void Compiler::forStatement() {
         consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
     }
 
+    // From here `loopStart` is where `continue` must go: the increment clause if there is one (it was just assigned above), otherwise the condition.
+    // The loop's scope depth is the for-scope's own (it holds `var i`), so break/continue leave `i` alone and discard only what the body declared.
+    current_().loops.push_back(LoopInfo{current_().scopeDepth, loopStart, {}});
     statement(); // the loop body
+    LoopInfo loop = std::move(current_().loops.back());
+    current_().loops.pop_back();
+
     emitLoop(loopStart);
 
     if (hasCondition) {
         patchJump(exitJump);
         emitByte(OpCode::OP_POP); // discard the (falsey) condition that caused the loop to exit
     }
+
+    // `break` lands here: after the loop (and after the condition was discarded), but BEFORE endScope() pops the loop variable, which the break path still has on the stack.
+    for (size_t breakJump : loop.breakJumps) patchJump(breakJump);
 
     endScope();
 }
@@ -931,6 +952,37 @@ void Compiler::emitConstantOp(OpCode op, size_t constantIndex) {
     }
 }
 
+void Compiler::emitLoopLocalsCleanup(int loopScopeDepth) {
+    auto& locals = current_().locals;
+    // Innermost first, the same order endScope() uses. The locals stay registered: the code after this jump (the rest of the block) is compiled as usual and its endScope() emits the same pops for the path that does NOT jump.
+    for (size_t i = locals.size(); i > 0 && locals[i - 1].depth > loopScopeDepth; --i) {
+        emitByte(locals[i - 1].isCaptured ? OpCode::OP_CLOSE_UPVALUE : OpCode::OP_POP);
+    }
+}
+
+void Compiler::breakStatement() {
+    Token keyword = previous();
+    consume(TokenType::SEMICOLON, "Expect ';' after 'break'.");
+    if (current_().loops.empty()) {
+        errorAt(keyword, "Can't use 'break' outside of a loop.");
+        return;
+    }
+    emitLoopLocalsCleanup(current_().loops.back().scopeDepth);
+    size_t jump = emitJump(OpCode::OP_JUMP);
+    current_().loops.back().breakJumps.push_back(jump);
+}
+
+void Compiler::continueStatement() {
+    Token keyword = previous();
+    consume(TokenType::SEMICOLON, "Expect ';' after 'continue'.");
+    if (current_().loops.empty()) {
+        errorAt(keyword, "Can't use 'continue' outside of a loop.");
+        return;
+    }
+    emitLoopLocalsCleanup(current_().loops.back().scopeDepth);
+    emitLoop(current_().loops.back().continueTarget);
+}
+
 size_t Compiler::emitJump(OpCode jumpOp) {
     emitByte(jumpOp);
     emitByte(0xFF); // placeholder high byte
@@ -950,8 +1002,7 @@ void Compiler::patchJump(size_t jumpPlaceholderOffset) {
 
 void Compiler::emitLoop(size_t loopStartOffset) {
     emitByte(OpCode::OP_LOOP);
-    // +2: account for OP_LOOP's own 2-byte operand, which sits between "now" and the jump landing there 
-    // otherwise the jump would land 2 bytes short of loopStartOffset.
+    // +2: account for OP_LOOP's own 2-byte operand, which sits between "now" and the jump landing there otherwise the jump would land 2 bytes short of loopStartOffset.
     size_t distance = currentChunk().code.size() - loopStartOffset + 2;
     if (distance > 0xFFFF) {
         errorAt(previous(), "Loop body too large to jump over (limit 65535 bytes for this increment).");

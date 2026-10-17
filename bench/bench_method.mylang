@@ -1,0 +1,17 @@
+// Instances: construction, field access, method calls, and inheritance with super.
+class Counter {
+  init(start) { this.n = start; }
+  add(x) { this.n = this.n + x; return this.n; }
+  get() { return this.n; }
+}
+class Doubler < Counter {
+  add(x) { return super.add(x * 2); }
+}
+var c = Counter(0);
+var d = Doubler(0);
+for (var i = 0; i < 400000; i = i + 1) {
+  c.add(1);
+  d.add(1);
+}
+print c.get();
+print d.get();

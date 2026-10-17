@@ -1,0 +1,19 @@
+// Closures: calling through captured variables, and creating many closures.
+def makeCounter() {
+  var n = 0;
+  def inc() { n = n + 1; return n; }
+  return inc;
+}
+var counter = makeCounter();
+for (var i = 0; i < 600000; i = i + 1) { counter(); }
+print counter();
+
+def adder(x) {
+  def add(y) { return x + y; }
+  return add;
+}
+var total = 0;
+for (var i = 0; i < 200000; i = i + 1) {
+  total = total + adder(i)(1);
+}
+print total;

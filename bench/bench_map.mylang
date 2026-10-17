@@ -1,0 +1,18 @@
+// Maps: string-key set, get, update, and membership tests.
+var m = {};
+for (var i = 0; i < 100000; i = i + 1) {
+  m["key" + str(i)] = i;
+}
+var total = 0;
+for (var i = 0; i < 100000; i = i + 1) {
+  var k = "key" + str(i);
+  total = total + m[k];
+  m[k] += 1;
+}
+var hits = 0;
+for (var i = 0; i < 100000; i = i + 2) {
+  if (hasKey(m, "key" + str(i))) { hits = hits + 1; }
+}
+print total;
+print hits;
+print length(m);

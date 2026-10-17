@@ -1,0 +1,15 @@
+// Strings: concatenation, conversion, split and join.
+var s = "";
+for (var i = 0; i < 60000; i = i + 1) {
+  s = s + str(i % 10);
+}
+print len(s);
+var parts = [];
+for (var i = 0; i < 300000; i = i + 1) {
+  push(parts, str(i));
+}
+var joined = join(parts, ",");
+var back = split(joined, ",");
+print len(joined);
+print length(back);
+print upper("abc") + lower("DEF");

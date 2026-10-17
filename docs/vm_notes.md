@@ -1,4 +1,4 @@
-# mylang - Bytecode VM Notes
+# mylang — Bytecode VM Notes
 
 Status: the VM covers the whole language (closures, classes, arrays, maps,
 imports, the standard library) and has a cycle collector. This documents the
@@ -713,6 +713,67 @@ needs a superclass: "Can't use 'this' outside of a class.", "Can't use
 superclass.", and "A class can't inherit from itself.". The tree-walker
 has no such checks; it finds out at run time ("Undefined variable
 'this'."). See "Known differences from the tree-walker".
+
+## Design note: break and continue
+
+Both engines implement them with the same rules (see "Break and continue" in
+`language_spec.md`): they target the innermost loop of the CURRENT function,
+and using one outside a loop is the compile/parse error "Can't use 'break'
+outside of a loop." (a function declared inside a loop starts with no
+enclosing loop).
+
+**Compiler (VM).** Each `FunctionState` has a stack of `LoopInfo`
+(`compiler.h`), pushed for the body of every `while` and `for`:
+- `scopeDepth`: the scope depth of the loop itself. Locals declared deeper
+  than this belong to the loop body. For a `for` loop it is the depth of the
+  for-scope that holds `var i`, so `break` and `continue` never touch `i`.
+- `continueTarget`: where `continue` goes. For a `while` loop it is the
+  condition. For a `for` loop it is the increment clause when there is one
+  (the compiler already reassigns `loopStart` to the increment before it
+  compiles the body, so the value is simply read at that moment), otherwise
+  the condition. `continue` is therefore an ordinary `OP_LOOP` backwards.
+- `breakJumps`: the forward `OP_JUMP`s emitted by `break`, patched once the
+  loop is finished.
+
+`break` and `continue` first call `emitLoopLocalsCleanup`: one `OP_POP` per
+local deeper than the loop (innermost first), or `OP_CLOSE_UPVALUE` for a local
+a closure has captured, the same choice `endScope()` makes. The locals are NOT
+removed from the compiler's list, because the rest of the block after the jump
+is still compiled in their scope, and its own `endScope()` emits the same pops
+for the path that does not jump.
+
+**Where `break` lands.** In `while`, after the final `OP_POP` that discards the
+falsey condition: a `break` runs inside the body, where the condition was
+already popped, so it must skip that pop. In `for`, at the same point but
+BEFORE `endScope()`, because the break path still has the loop variable on the
+stack and `endScope()` must pop it (and close it, if a closure captured it).
+
+**Why compile-time `isCaptured` is enough.** A jump emitted before a closure is
+compiled might not close an upvalue that closure later captures, but then the
+closure is created after the jump in the same scope instance, so it cannot have
+captured anything when the jump runs. A loop inside that scope that ran the
+capture before the break would be the innermost loop, and the break would
+target it, leaving the captured local out of its cleanup. The same reasoning
+covers `continue`.
+
+**Tree-walker.** A `for` loop used to be rewritten as `while (cond) { body;
+increment; }`, which would make `continue` skip the increment. `WhileStmt`
+now has a separate optional `increment` that runs after the body on every
+iteration, including after `continue`, and not after `break`. `break` and
+`continue` do not throw (unlike `return`): they set `Interpreter::loopSignal`,
+`executeBlock` stops as soon as it sees it set, and the nearest `visitWhileStmt`
+reads and resets it. They never leave their function, so a flag is enough and
+costs nothing when unused. A side effect of the new `for` shape: the parser no
+longer wraps body and increment in an extra block, so there is one fewer
+environment allocation per iteration, and `for` loops are noticeably faster
+(`bench_loop` went from 0.81s to 0.64s).
+
+**Parse error handling.** The tree-walker's parser tracks `loopDepth` with a
+small RAII guard (so an error unwinding through a loop body cannot leave it
+raised). The out-of-loop error is reported but not thrown: throwing would make
+`synchronize()` skip the enclosing block's closing brace and add a second,
+misleading error. An empty block stands in for the statement, so a surrounding
+`if` or loop body is never null.
 
 ## Design note: garbage collection
 

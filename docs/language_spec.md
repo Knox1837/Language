@@ -1,4 +1,4 @@
-# mylang - Language Specification
+# mylang — Language Specification
 
 Status: living document. Update this whenever a language feature changes.
 Currently covers: lexer, parser, functions & closures, classes,
@@ -18,7 +18,7 @@ declarations (`def`, no return-type annotations).
 ```
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
-class     this      super     import    as
+class     this      super     import    as        break     continue
 ```
 
 ## Data types
@@ -68,11 +68,14 @@ method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
+statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
+             | breakStmt | continueStmt | block
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt   -> "while" "(" expression ")" statement
 forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
 returnStmt  -> "return" expression? ";"
+breakStmt   -> "break" ";"
+continueStmt -> "continue" ";"
 block       -> "{" declaration* "}"
 exprStmt    -> expression ";"
 printStmt   -> "print" expression ";"
@@ -108,7 +111,7 @@ primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
 
 ## For loops
 
-C-style three-clause `for`, desugared by the parser into an equivalent `while` loop (no dedicated interpreter support needed):
+C-style three-clause `for`, treated as a `while` loop with an increment clause (the parser builds the same loop node for both, so the interpreter has no separate `for` support):
 
 ```
 for (var i = 0; i < 5; i = i + 1) {
@@ -121,11 +124,11 @@ for (var i = 0; i < 5; i = i + 1) {
   including its body) or any expression statement (e.g. reusing an
   existing variable: `for (i = 0; ...; ...)`), or omitted entirely.
 - The condition, if omitted, defaults to `true`.
-- The increment runs after each iteration of the body, including when
-  the body uses `return` to exit a surrounding function... but note
-  there is currently no `break`/`continue`, so the only ways to leave a
-  `for` loop early are the condition becoming false or a `return`.
-- Because `for` desugars to `while`, the loop variable is a single
+- The increment runs after each iteration of the body, including an
+  iteration the body ended with `continue` (see "Break and continue"
+  below). A loop can be left early with `break`, with a `return`, or
+  by its condition becoming false.
+- Because `for` is a `while` loop underneath, the loop variable is a single
   mutable binding shared across iterations (not a fresh binding per
   iteration): a closure created inside the loop body and called after
   the loop sees the loop variable's *final* value, e.g.:
@@ -137,6 +140,40 @@ for (var i = 0; i < 5; i = i + 1) {
   }
   print fns[0](); // 3, not 0 -- all three closures share the same `i`
   ```
+
+## Break and continue
+
+`break;` leaves the innermost enclosing `while` or `for` loop immediately.
+`continue;` skips the rest of the current iteration of the innermost enclosing
+loop and starts the next one:
+
+```
+var i = 0;
+while (true) {
+    i = i + 1;
+    if (i == 3) { continue; }   // skip printing 3
+    if (i > 5) { break; }       // stop after 5
+    print i;                    // 1 2 4 5
+}
+```
+
+- They apply to the **innermost** loop only. There are no labels, so leaving
+  two loops at once takes a flag variable or a function with `return`.
+- In a `for` loop, `continue` still runs the **increment** clause before the
+  condition is checked again, so `for (var i = 0; i < 10; i = i + 1)` with a
+  `continue` in its body cannot get stuck. (`break` does not run the increment.)
+  With no increment clause, `continue` goes straight to the condition.
+- They work from any depth inside the loop body: through nested blocks and
+  `if`/`else` branches. Variables declared in the body go out of scope as the
+  loop is left, and a closure that captured one of them keeps its own copy of
+  it, exactly as when the body ends normally.
+- A loop does not extend into a function declared inside it: `break` or
+  `continue` inside a `def` (or a method) that is itself inside a loop, but not
+  inside a loop of its own, is an error.
+- Using either outside a loop is a syntax error: `Can't use 'break' outside of
+  a loop.` (or `'continue'`). The VM refuses to run the program; the
+  tree-walking interpreter reports the error and runs the rest, as it does for
+  any syntax error.
 
 ## Functions
 
@@ -444,9 +481,6 @@ interpreter does not define them.
 Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
-- **`break` and `continue`:** loops end only through their condition or a
-  `return`. (They are not keywords, so `break;` is read as a variable named
-  `break` and fails with "Undefined variable 'break'".)
 - **String escape sequences** (`\n`, `\t`, `\"`, `\\`): see the string row in
   the data-types table.
 - **Function expressions / lambdas:** functions can only be declared with

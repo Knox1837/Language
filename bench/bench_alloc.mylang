@@ -1,0 +1,13 @@
+// Allocation churn: many short-lived arrays, maps and instances (stresses object creation and, in the VM, the garbage collector).
+class Point { init(x, y) { this.x = x; this.y = y; } }
+var keep = [];
+var total = 0;
+for (var i = 0; i < 400000; i = i + 1) {
+  var p = Point(i, i + 1);
+  var a = [p.x, p.y];
+  var m = {"sum": p.x + p.y};
+  total = total + a[1] + m["sum"];
+  if (i % 1000 == 0) { push(keep, p); }
+}
+print total;
+print length(keep);

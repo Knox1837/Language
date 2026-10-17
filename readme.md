@@ -79,6 +79,23 @@ The source files are listed explicitly in `CMakeLists.txt`: when you add a
 ./mylang --vm          # VM REPL
 ```
 
+## Benchmarks
+
+`bench/` holds a small benchmark suite (`bench_*.mylang`: calls, loops, arrays,
+maps, method calls, closures, allocation, strings) and a runner. Build in
+Release mode first (`cmake --build build --config Release`), then:
+
+```
+powershell -ExecutionPolicy Bypass -File bench\run_bench.ps1
+```
+
+It times each script on the VM (best and median of several runs) and once on
+the tree-walking interpreter, and checks that every run printed the same
+output, so a faster result is never a wrong one. `-Save` appends the table,
+with the date, git commit and machine, to `bench/results.md`, so you can compare
+before and after a change; `-SkipTree` benchmarks the VM only. The header of
+`bench\run_bench.ps1` lists all the options.
+
 ## Docs
 
 See `docs/language_spec.md` for the language grammar/semantics (including

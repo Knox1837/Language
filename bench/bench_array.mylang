@@ -1,0 +1,15 @@
+// Arrays: push, index read/write, sort, reverse.
+var a = [];
+for (var i = 0; i < 400000; i = i + 1) {
+  push(a, (i * 7919) % 100003);
+}
+var total = 0;
+for (var i = 0; i < length(a); i = i + 1) {
+  a[i] = a[i] + 1;
+  total = total + a[i];
+}
+sort(a);
+reverse(a);
+print total;
+print a[0];
+print a[length(a) - 1];

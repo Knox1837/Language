@@ -23,6 +23,13 @@ struct UpvalueInfo {
 // What kind of function body is being compiled. A METHOD or INITIALIZER has the receiver (`this`) in slot 0 instead of its own closure, and an INITIALIZER always returns it.
 enum class FunctionType { SCRIPT, FUNCTION, METHOD, INITIALIZER };
 
+// One loop that is currently being compiled, so `break` and `continue` inside its body know where to go.
+struct LoopInfo {
+    int scopeDepth;                    // scope depth of the loop itself; locals declared DEEPER than this belong to the body and must be discarded when a break/continue leaves it
+    size_t continueTarget;             // where `continue` jumps back to: the condition for a while loop, the increment clause for a for loop that has one
+    std::vector<size_t> breakJumps;    // forward jumps emitted by `break`, patched to land just after the loop
+};
+
 // Compile-time state for ONE function currently being compiled (the top-level script is FunctionState #0). 
 // Kept on a stack in Compiler so entering a nested function declaration is just push-a-new-one, compile its body, pop back to the enclosing state.
 struct FunctionState {
@@ -32,6 +39,7 @@ struct FunctionState {
     int scopeDepth = 0;
     bool reportedConstantOverflow = false; // so a function that runs out of constants gets ONE error message, not one per extra constant
     FunctionType type = FunctionType::SCRIPT;
+    std::vector<LoopInfo> loops = {}; // loops enclosing the current position in THIS function, innermost last (a loop outside a function does not make `break` legal inside it)
 };
 
 class Compiler {
@@ -95,6 +103,9 @@ private:
     void endScope();
     void ifStatement();
     void whileStatement();
+    void breakStatement();    // "break" ";"     -> discard the body's locals, jump past the loop
+    void continueStatement(); // "continue" ";" -> discard the body's locals, jump to the next iteration
+    void emitLoopLocalsCleanup(int loopScopeDepth); // emits the pops / upvalue-closes for every local deeper than loopScopeDepth WITHOUT forgetting them (code after the jump is still compiled in their scope)
     void forStatement();
 
     // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local the split happens here based on scopeDepth.
