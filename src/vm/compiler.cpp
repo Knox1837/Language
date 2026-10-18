@@ -11,7 +11,7 @@ std::shared_ptr<VMFunction> Compiler::compile(const std::string& source) {
     Lexer lexer(source);
     tokens = lexer.scanTokens();
     current = 0;
-    hadError = false;
+    hadError = lexer.hadError(); // an error the lexer already printed (unknown escape, stray character, unterminated string) means the program is not run
     functionStack.clear();
     classStack.clear();
 

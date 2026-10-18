@@ -1,4 +1,4 @@
-# mylang — Bytecode VM Notes
+# mylang - Bytecode VM Notes
 
 Status: the VM covers the whole language (closures, classes, arrays, maps,
 imports, the standard library) and has a cycle collector. This documents the
@@ -1026,6 +1026,12 @@ the tests compare them line by line. What still differs:
   where the tree-walker prints "Error at ...", and the VM compiler has
   no panic mode, so one syntax error can be followed by several
   follow-on errors.
+- **Errors the lexer reports** (an unknown escape sequence in a string, an
+  unterminated string, a stray character) stop the VM from running the
+  program: `Lexer::hadError()` is checked by `Compiler::compile`, which then
+  returns no function. The tree-walker prints the same message and runs the
+  rest of the file anyway, as it does for any syntax error. (Before this, the
+  VM ran programs that only had a stray character, such as `print 1;@`.)
 - **Line numbers for errors raised inside natives:** the VM reports the
   line of the call; the tree-walker prints `[line 0]`.
 - **A failed `class A < x {}` in the REPL** leaves `A` defined as an

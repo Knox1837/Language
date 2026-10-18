@@ -1,4 +1,4 @@
-# mylang — Language Specification
+# mylang - Language Specification
 
 Status: living document. Update this whenever a language feature changes.
 Currently covers: lexer, parser, functions & closures, classes,
@@ -26,7 +26,7 @@ class     this      super     import    as        break     continue
 | Type   | Example        | Notes |
 |--------|----------------|-------|
 | number | `10`, `3.14`   | always stored as double-precision float internally |
-| string | `"hello"`      | double-quoted only. There are no escape sequences: the text between the quotes is taken literally, so `"a\nb"` is the four characters `a`, `\`, `n`, `b`, and a string cannot contain a `"` |
+| string | `"hello"`      | double-quoted only; a backslash starts an escape sequence (see "String escapes" below); may span several lines |
 | bool   | `true`, `false`| |
 | nil    | `nil`          | absence of a value; also the default for `var x;` with no initializer, and for a function with no `return` |
 | function | `def f() {}` | first-class: can be assigned, passed, and returned |
@@ -35,6 +35,40 @@ class     this      super     import    as        break     continue
 | array  | `[1, 2, 3]`    | reference type — assigning or passing an array shares the same underlying data, like instances |
 | map    | `{"key": val}` | reference type; **string keys only** (see design note below) |
 | module | (result of `import ... as name`) | a namespace exposing the imported file's top-level `def`/`class`/`var` bindings via `.` |
+
+## String escapes
+
+Inside a string literal a backslash starts an escape sequence, which stands for
+one character:
+
+| Written | Character |
+|---------|-----------|
+| `\n`    | newline |
+| `\t`    | tab |
+| `\r`    | carriage return |
+| `\\`    | a single backslash |
+| `\"`    | a double quote (so it does not end the string) |
+
+```
+print "name:\tKnox\nsaid \"hi\"";   // two lines, a tab, and quotes
+print len("a\nb");                  // 3: each escape is one character
+print "C:\\temp";                   // C:\temp
+print "\\n";                        // \n -- a backslash and an n, not a newline
+```
+
+- **Any other backslash sequence is an error:** `"bad \q"` reports
+  `Unknown escape sequence '\q' in string.` The VM refuses to run the program;
+  the tree-walking interpreter reports the error, keeps the two characters as
+  written, and carries on (as it does for every syntax error).
+- A string that ends in a backslash must write it as `\\` (`"dir\\"`), because
+  `\"` is an escaped quote and would leave the string unterminated.
+- A string literal may also contain real line breaks; they are part of the value.
+- There are no `\0`, `\xNN`, or Unicode escapes. Strings are byte strings, so
+  UTF-8 text typed directly in a string is stored and printed as it is, and
+  `len` counts bytes (`len("é")` is 2).
+- Windows paths: write `\\` or use `/`, which Windows accepts too. On Windows
+  `"sub/lib.mylang"` and `"sub\\lib.mylang"` both name the same file, while
+  `"sub\lib.mylang"` is an unknown-escape error.
 
 ## Truthiness
 
@@ -348,6 +382,8 @@ print math.square(5);      // 25
 print math.PI_APPROX;      // 3.14
 ```
 
+- The path is an ordinary string literal, so backslashes in it are escape
+  sequences: write `/` (works on every platform) or `\\`, never a single `\`.
 - `import "path" as name` runs the imported file's top-level code once
   and binds `name` to a **module object** — accessing anything the file
   defined at its top level (`def`, `class`, `var`) goes through `.`,
@@ -481,8 +517,6 @@ interpreter does not define them.
 Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
-- **String escape sequences** (`\n`, `\t`, `\"`, `\\`): see the string row in
-  the data-types table.
 - **Function expressions / lambdas:** functions can only be declared with
   `def name(...) { ... }`, so there is no anonymous function to pass to a
   helper like `map` or `filter`, and `sort` takes no comparator.

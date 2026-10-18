@@ -113,22 +113,46 @@ void Lexer::scanToken() {
                 identifier();
             } else {
                 std::cerr << "[line " << line << "] Unexpected character: " << c << "\n";
+                errored = true;
             }
             break;
     }
 }
 
+// Scans a string literal (the opening quote is already consumed) and builds its VALUE: the text between the quotes with escape sequences replaced by the characters they stand for. \n newline    \t tab    \r carriage return    \\ backslash    \" double quote
+// A backslash followed by anything else is an error ("Unknown escape sequence"). The two characters are kept as written so the rest of the file still scans, and errored is set so the VM refuses to run.
 void Lexer::string_() {
+    std::string value;
     while (peek() != '"' && !isAtEnd()) {
-        if (peek() == '\n') line++;
-        advance();
+        char c = advance();
+        if (c == '\n') line++; // a string may span lines
+        if (c != '\\') {
+            value += c;
+            continue;
+        }
+        if (isAtEnd()) break; // a lone backslash at the very end: reported below as an unterminated string
+        char escaped = advance(); // consumed here, so an escaped quote (\") does not end the string
+        switch (escaped) {
+            case 'n': value += '\n'; break;
+            case 't': value += '\t'; break;
+            case 'r': value += '\r'; break;
+            case '\\': value += '\\'; break;
+            case '"': value += '"'; break;
+            default:
+                std::cerr << "[line " << line << "] Unknown escape sequence '\\" << escaped << "' in string.\n";
+                errored = true;
+                if (escaped == '\n') line++;
+                value += '\\';
+                value += escaped;
+                break;
+        }
     }
     if (isAtEnd()) {
         std::cerr << "[line " << line << "] Unterminated string.\n";
+        errored = true;
         return;
     }
     advance(); // closing quote
-    std::string value = source.substr(start + 1, current - start - 2);
     addToken(TokenType::STRING, value);
 }
 
