@@ -32,6 +32,13 @@ public:
     // Compiles and runs `source` in one call: convenience entry point matching how main.cpp invokes the tree-walking interpreter.
     InterpretResult interpret(const std::string& source);
 
+    // Calls a script value (closure, native, bound method or class) from inside a native function and waits for its result: this is how map/filter/reduce/sort call the function they were given. Returns false if the call failed; the error has then ALREADY been reported (see errorReported), so the native must just return false without setting its own error message.
+    // Only valid while a native is running, i.e. while run() is on the C++ stack.
+    bool callFunction(const VMValue& callee, const std::vector<VMValue>& args, VMValue& result);
+
+    // The VM that is currently executing (set for the duration of interpret()). Natives are plain functions with no VM parameter, so they find the VM through this.
+    static VM* active();
+
     // Relative import paths resolve against this directory (the top-level script's directory, or "." in the REPL). Without it, `import` is a runtime error, as in the tree-walker.
     void setModuleBaseDir(const std::string& dir);
 
@@ -55,7 +62,11 @@ private:
     // The globals table of the code that is running right now: the module its closure was created in.
     std::unordered_map<std::string, VMValue>& currentGlobals() { return currentFrame().closure->module->globals; }
 
-    InterpretResult run();
+    // Runs instructions until the call frame that was on top when run() was entered has returned: `baseFrames` is the number of frames at that moment, 0 for the whole program. A nested call from a native (callFunction) uses a larger value and gets its result left on the stack.
+    InterpretResult run(size_t baseFrames = 0);
+
+    // True once runtimeError() has printed an error, until the next interpret(). A native that called back into the VM and saw it fail must not have its (empty) error printed again.
+    bool errorReported = false;
 
     CallFrame& currentFrame() { return frames.back(); }
 
@@ -73,15 +84,14 @@ private:
     bool callValue(const VMValue& callee, int argCount);
     bool call(std::shared_ptr<VMClosure> closure, int argCount);
 
-    // Returns the (possibly newly-created) VMUpvalue for the given ABSOLUTE stack index.
-    // If one already exists for that exact slot (because another closure already captured it), the SAME object is returned
+    // Returns the (possibly newly-created) VMUpvalue for the given ABSOLUTE stack index. If one already exists for that exact slot (because another closure already captured it), the SAME object is returned
     std::shared_ptr<VMUpvalue> captureUpvalue(size_t stackIndex);
 
     // Closes every still-open upvalue whose stackIndex is >= `fromIndex`. Called whenever the stack slots at or above that point are aboutto be reused
     void closeUpvalues(size_t fromIndex);
 
     // Type-checked arithmetic helper shared by OP_ADD/SUBTRACT/etc.
-    // returns false (and reports the error) if either operand isn't a number, so run() can bail out with RUNTIME_ERROR cleanly.
+    // returns false (and reports the error) if either operand isn't a number, so run() can bail out with RUNTIME_ERROR cleanly. The message is the tree-walker's, word for word: "Operands must be numbers."
     bool requireNumbers(const VMValue& a, const VMValue& b);
 
     // Equality across any two VMValues, including different alternative types

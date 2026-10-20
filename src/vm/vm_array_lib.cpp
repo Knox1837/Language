@@ -2,7 +2,9 @@
 #include "vm_array_lib.h"
 #include "vm_array.h"
 #include "vm_map.h"
+#include "vm.h"
 #include "vm_native.h"
+#include "../util/merge_sort.h"
 #include <algorithm>
 #include <cmath>
 
@@ -17,6 +19,7 @@ struct ArrayOpInfo {
     const char* name;
     int arity; // counts `rest` only: the free-function form takes one more (the array itself)
     ArrayOp fn;
+    int maxArity = -1; // -1: exactly `arity`; otherwise the most `rest` may hold (sort takes an optional comparator)
 };
 
 const char* const kOrderError = "Can only sort arrays of all-numbers or all-strings.";
@@ -89,8 +92,90 @@ bool opIndexOf(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& resul
     return true;
 }
 
-// Ascending, IN PLACE; returns the same array so calls can chain (arr.sort().reverse()).
-bool opSort(const ArrayPtr& array, std::vector<VMValue>&, VMValue& result, std::string& error) {
+// Is this something a native may call? (closure, native, bound method, class)
+bool isCallable(const VMValue& v) {
+    return isVMClosure(v) || isVMNative(v) || isVMBoundMethod(v) || isVMClass(v);
+}
+
+const char* const kFunctionError = "Expected a function argument.";
+
+// map(f): a NEW array of f(element) for every element.
+bool opMap(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& result, std::string& error) {
+    if (!isCallable(rest[0])) { error = kFunctionError; return false; }
+    VM* vm = VM::active();
+    std::vector<VMValue> items = array->elements;
+    auto out = std::make_shared<VMArray>(); // held by this local, so the collector sees it as in use while callbacks run
+    out->elements.reserve(items.size());
+    for (const VMValue& item : items) {
+        VMValue mapped;
+        if (!vm->callFunction(rest[0], {item}, mapped)) return false;
+        out->elements.push_back(std::move(mapped));
+    }
+    result = VMValue{out};
+    return true;
+}
+
+// filter(f): a NEW array of the elements for which f(element) is truthy.
+bool opFilter(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& result, std::string& error) {
+    if (!isCallable(rest[0])) { error = kFunctionError; return false; }
+    VM* vm = VM::active();
+    std::vector<VMValue> items = array->elements;
+    auto out = std::make_shared<VMArray>();
+    for (const VMValue& item : items) {
+        VMValue keep;
+        if (!vm->callFunction(rest[0], {item}, keep)) return false;
+        if (isVMTruthy(keep)) out->elements.push_back(item);
+    }
+    result = VMValue{out};
+    return true;
+}
+
+// reduce(f, initial): acc = initial; acc = f(acc, element) for each element, left to right; returns acc (so an empty array gives `initial`).
+bool opReduce(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& result, std::string& error) {
+    if (!isCallable(rest[0])) { error = kFunctionError; return false; }
+    VM* vm = VM::active();
+    std::vector<VMValue> items = array->elements;
+    VMValue accumulator = rest[1];
+    for (const VMValue& item : items) {
+        VMValue next;
+        if (!vm->callFunction(rest[0], {accumulator, item}, next)) return false;
+        accumulator = std::move(next);
+    }
+    result = std::move(accumulator);
+    return true;
+}
+
+// sort(cmp): cmp(a, b) returns a number: negative if a belongs before b, positive if after, zero if equal (the original order is kept: the sort is stable).
+// It sorts a COPY and replaces the array's contents only when it finishes, so an error in the comparator leaves the array exactly as it was.
+bool sortWithComparator(const ArrayPtr& array, const VMValue& cmp, VMValue& result, std::string& error) {
+    if (!isCallable(cmp)) { error = kFunctionError; return false; }
+    VM* vm = VM::active();
+    std::vector<VMValue> items = array->elements;
+    bool failed = false;
+    std::string failure; // set only for an error the comparator's caller must report (a non-number); empty if the error inside the callback was already reported
+    stableMergeSort(items, [&](const VMValue& a, const VMValue& b) {
+        if (failed) return false; // after a failure the merge just finishes quickly without calling anything
+        VMValue verdict;
+        if (!vm->callFunction(cmp, {a, b}, verdict)) { failed = true; return false; }
+        if (!isVMNumber(verdict)) {
+            failed = true;
+            failure = "Comparator must return a number.";
+            return false;
+        }
+        return asVMNumber(verdict) > 0;
+    });
+    if (failed) {
+        error = failure;
+        return false;
+    }
+    array->elements = std::move(items);
+    result = array;
+    return true;
+}
+
+// Ascending, IN PLACE; returns the same array so calls can chain (arr.sort().reverse()). With an argument, sorts by that comparator instead.
+bool opSort(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& result, std::string& error) {
+    if (rest.size() == 1) return sortWithComparator(array, rest[0], result, error);
     auto& elements = array->elements;
     // With fewer than two elements there is nothing to compare, so (like the tree-walker) any element type is accepted and there is nothing to do.
     if (elements.size() >= 2) {
@@ -162,10 +247,13 @@ const ArrayOpInfo kOps[] = {
     {"length",       0, opLength},
     {"contains",     1, opContains},
     {"indexOf",      1, opIndexOf},
-    {"sort",         0, opSort},
+    {"sort",         0, opSort, 1},
     {"reverse",      0, opReverse},
     {"slice",        2, opSlice},
     {"binarySearch", 1, opBinarySearch},
+    {"map",          1, opMap},
+    {"filter",       1, opFilter},
+    {"reduce",       2, opReduce},
 };
 
 } // namespace
@@ -175,7 +263,7 @@ void registerVMArrayLib(std::unordered_map<std::string, VMValue>& globals) {
         ArrayOp fn = op.fn;
         // length() is the one free function that will also accept maps, so its message differs.
         bool isLength = std::string(op.name) == "length";
-        globals[op.name] = VMValue{std::make_shared<VMNative>(
+        auto native = std::make_shared<VMNative>(
             op.name, op.arity + 1,
             [fn, isLength](std::vector<VMValue>& args, VMValue& result, std::string& error) {
                 if (isLength && isVMMap(args[0])) {
@@ -188,7 +276,9 @@ void registerVMArrayLib(std::unordered_map<std::string, VMValue>& globals) {
                 }
                 std::vector<VMValue> rest(args.begin() + 1, args.end());
                 return fn(asVMArray(args[0]), rest, result, error);
-            })};
+            });
+        if (op.maxArity >= 0) native->maxArity = op.maxArity + 1;
+        globals[op.name] = VMValue{native};
     }
 }
 
@@ -204,6 +294,7 @@ bool getVMArrayMethod(const std::shared_ptr<VMArray>& array, const std::string& 
                     return fn(std::static_pointer_cast<VMArray>(raw->shared_from_this()), args, out, error);
                 });
             native->boundReceiver = VMValue{array};
+            if (op.maxArity >= 0) native->maxArity = op.maxArity;
             result = VMValue{native};
             return true;
         }

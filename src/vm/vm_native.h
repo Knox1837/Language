@@ -13,7 +13,8 @@ public:
     using Fn = std::function<bool(std::vector<VMValue>& args, VMValue& result, std::string& error)>;
 
     std::string name;
-    int arity = 0;
+    int arity = 0;       // the MINIMUM number of arguments
+    int maxArity = -1;   // the most it accepts; -1 means "exactly `arity`". Only a few natives take optional arguments (sort(arr, comparator))
     Fn fn;
 
     // For a native bound to one array or map (`a.push`): that array or map. It is kept HERE, not captured inside `fn`, so the collector can see the reference: `a[0] = a.push;` makes a cycle (a -> native -> a) that it must be able to find.

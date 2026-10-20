@@ -92,7 +92,7 @@ private:
     void classDeclaration();
     void importDeclaration(); // import "path" as name;  ->  OP_IMPORT, then the alias is defined like a `var`
     void method();      // one method inside a class body: name "(" params ")" "{" body "}", then OP_METHOD
-    void functionBody(const std::string& name, FunctionType type = FunctionType::FUNCTION, const std::string& kind = "function"); // parses "(" params ")" "{" body "}" into a NEW FunctionState; `kind` only words the error messages
+    void functionBody(const std::string& name, FunctionType type = FunctionType::FUNCTION, const std::string& kind = "function", bool anonymous = false); // parses "(" params ")" "{" body "}" into a NEW FunctionState; `kind` only words the error messages, and `anonymous` (a function expression) words the missing-"(" message
     void emitReturn();  // the implicit return at the end of a body: `this` for an initializer, nil for everything else
     void statement();
     void printStatement();
@@ -133,6 +133,7 @@ private:
     void namedVariable(const Token& name, bool canAssign); // variable() for an explicit token, so `this` and `super` can reuse the local/upvalue/global resolution
     void thisExpr(bool canAssign);   // the prefix `this`
     void superExpr(bool canAssign);  // the prefix `super`, which must be followed by ".method"
+    void functionExpression(bool canAssign); // the prefix `def`: an anonymous function, def(params) { body }
     void and_(bool canAssign);
     void or_(bool canAssign);
     void call(bool canAssign);       // the infix "(" that turns a primary expression into a function call

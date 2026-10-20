@@ -50,6 +50,11 @@ void Compiler::declaration() {
     }
 }
 
+// def(params) { body } in expression position: an anonymous function. The `def` is already consumed (it was the prefix token). functionBody() leaves the new closure on the stack, which is exactly the value of the expression.
+void Compiler::functionExpression(bool) {
+    functionBody("", FunctionType::FUNCTION, "function", true);
+}
+
 void Compiler::functionDeclaration() {
     consume(TokenType::IDENTIFIER, "Expect function name.");
     Token nameToken = previous();
@@ -66,7 +71,7 @@ void Compiler::functionDeclaration() {
     defineVariable(globalConstant);
 }
 
-void Compiler::functionBody(const std::string& name, FunctionType type, const std::string& kind) {
+void Compiler::functionBody(const std::string& name, FunctionType type, const std::string& kind, bool anonymous) {
     auto function = std::make_shared<VMFunction>();
     function->name = name;
     functionStack.push_back(FunctionState{function, {}, {}, 0});
@@ -77,7 +82,7 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
 
     beginScope();
 
-    consume(TokenType::LEFT_PAREN, "Expect '(' after " + kind + " name.");
+    consume(TokenType::LEFT_PAREN, anonymous ? "Expect '(' after 'def' in a function expression." : "Expect '(' after " + kind + " name.");
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             function->arity++;
@@ -185,6 +190,10 @@ void Compiler::varDeclaration() {
     size_t globalConstant = (current_().scopeDepth == 0) ? identifierConstant(nameToken) : 0;
 
     if (match(TokenType::EQUAL)) {
+        // `var f = def(n) { ... f(n - 1) ... };` inside a function: the lambda refers to the variable it is being stored in. A named local function can do this because its name is marked initialized before its body is compiled, so do the same here when the initializer IS a function expression.
+        if (current_().scopeDepth > 0 && check(TokenType::DEF)) {
+            markInitialized();
+        }
         expression();
     } else {
         // "var x;" with no initializer -> nil, matching the tree-walker's default. 
@@ -845,6 +854,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule dotRule        = { nullptr,                 &Compiler::dot,    Precedence::CALL };
     static const ParseRule braceRule      = { &Compiler::mapLiteral,   nullptr,           Precedence::NONE }; // prefix only: a map literal
     static const ParseRule thisRule       = { &Compiler::thisExpr,     nullptr,           Precedence::NONE };
+    static const ParseRule functionRule   = { &Compiler::functionExpression, nullptr,     Precedence::NONE }; // prefix only: `def(...) { ... }` as an expression
     static const ParseRule superRule      = { &Compiler::superExpr,    nullptr,           Precedence::NONE };
     static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
@@ -859,6 +869,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::LEFT_BRACKET:   return bracketRule;
         case TokenType::LEFT_BRACE:     return braceRule;
         case TokenType::THIS:           return thisRule;
+        case TokenType::DEF:            return functionRule;
         case TokenType::SUPER:          return superRule;
         case TokenType::DOT:            return dotRule;
         case TokenType::MINUS:          return minusRule;

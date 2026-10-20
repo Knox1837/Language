@@ -20,6 +20,22 @@ VM::VM() {
     registerVMStdlib(mainModule->globals);
 }
 
+namespace {
+VM* activeVM = nullptr;
+
+// "Expected 2 arguments but got 1.", or for a native with optional arguments, "Expected 1 or 2 arguments but got 3."
+std::string arityMessage(int minArity, int maxArity, int got) {
+    std::ostringstream msg;
+    msg << "Expected " << minArity;
+    if (maxArity == minArity + 1) msg << " or " << maxArity;
+    else if (maxArity > minArity + 1) msg << " to " << maxArity;
+    msg << " arguments but got " << got << ".";
+    return msg.str();
+}
+} // namespace
+
+VM* VM::active() { return activeVM; }
+
 VM::~VM() {
     // Let go of everything the VM itself holds. What is left is held only by other heap objects, and one collection frees all of it, cycles included.
     frames.clear();
@@ -50,6 +66,14 @@ InterpretResult VM::interpret(const std::string& source) {
     frames.clear();
     openUpvalues.clear();
     currentlyLoading.clear(); // a runtime error inside an import on an earlier REPL line must not leave that file "still loading"
+    errorReported = false;
+
+    // natives find the VM through VM::active(); put the previous value back on every way out of interpret()
+    struct ActiveScope {
+        VM* previous;
+        explicit ActiveScope(VM* vm) : previous(activeVM) { activeVM = vm; }
+        ~ActiveScope() { activeVM = previous; }
+    } activeScope(this);
 
     Compiler compiler;
     std::shared_ptr<VMFunction> script = compiler.compile(source);
@@ -126,9 +150,9 @@ void VM::runtimeError(const std::string& message) {
         }
     }
     std::cerr << "[line " << line << "] Runtime error: " << message << "\n";
+    errorReported = true;
 
-    // Unwind the whole call stack so a subsequent REPL line (if any) starts clean rather than resuming mid-call 
-    //matches the tree-walker's interpret() catching RuntimeError at the top level and abandoning the rest of that script/line's execution.
+    // Unwind the whole call stack so a subsequent REPL line (if any) starts clean rather than resuming mid-call matches the tree-walker's interpret() catching RuntimeError at the top level and abandoning the rest of that script/line's execution.
     frames.clear();
     stack.clear();
     openUpvalues.clear();
@@ -140,17 +164,17 @@ bool VM::callValue(const VMValue& callee, int argCount) {
     }
     if (isVMNative(callee)) {
         auto native = asVMNative(callee); // copy the shared_ptr: `callee` refers into the stack, which is resized below
-        if (argCount != native->arity) {
-            std::ostringstream msg;
-            msg << "Expected " << native->arity << " arguments but got " << argCount << ".";
-            runtimeError(msg.str());
+        int maxArity = native->maxArity < 0 ? native->arity : native->maxArity;
+        if (argCount < native->arity || argCount > maxArity) {
+            runtimeError(arityMessage(native->arity, maxArity, argCount));
             return false;
         }
         std::vector<VMValue> args(stack.end() - argCount, stack.end());
         VMValue result;
         std::string error;
         if (!native->fn(args, result, error)) {
-            runtimeError(error);
+            // A native that called a script function (map, sort, ...) and saw it fail returns false with no message of its own: the failure inside the callback was already reported, and reporting again would print a second, empty error.
+            if (!errorReported) runtimeError(error);
             return false;
         }
         // Natives have no CallFrame: drop the arguments and the callee, then leave the result where the call expression's value belongs.
@@ -183,6 +207,21 @@ bool VM::callValue(const VMValue& callee, int argCount) {
     }
     runtimeError("Can only call functions.");
     return false;
+}
+
+bool VM::callFunction(const VMValue& callee, const std::vector<VMValue>& args, VMValue& result) {
+    const size_t baseFrames = frames.size();
+    // Set the call up exactly as OP_CALL would find it: the callee, then its arguments, on top of the stack.
+    push(callee);
+    for (const VMValue& argument : args) push(argument);
+    const int argCount = static_cast<int>(args.size());
+    if (!callValue(peekStack(argCount), argCount)) return false; // already reported
+    // A closure (or a method, or a class with an init()) pushed a CallFrame: run until it returns. A native, or a class without init(), has already left its result on the stack.
+    if (frames.size() > baseFrames) {
+        if (run(baseFrames) != InterpretResult::OK) return false; // already reported
+    }
+    result = pop();
+    return true;
 }
 
 bool VM::call(std::shared_ptr<VMClosure> closure, int argCount) {
@@ -225,7 +264,7 @@ void VM::closeUpvalues(size_t fromIndex) {
     }
 }
 
-InterpretResult VM::run() {
+InterpretResult VM::run(size_t baseFrames) {
     wideOperand = false;
     while (true) {
 #ifdef MYLANG_GC_STRESS
@@ -745,6 +784,8 @@ InterpretResult VM::run() {
                 } else {
                     push(result);
                 }
+                // A call made by a native (callFunction) ends here: its result is on top of the stack and the native takes it from there. For the whole program baseFrames is 0, and the frames.empty() check above has already returned.
+                if (frames.size() == baseFrames) return InterpretResult::OK;
                 break;
             }
             default: {

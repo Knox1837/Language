@@ -16,6 +16,11 @@
 #include <random>
 #include <stdexcept>
 
+// How a function prints: "<fn name>", or just "<fn>" for an anonymous one (def(x) { ... }).
+static std::string functionLabel(const std::string& name) {
+    return name.empty() ? "<fn>" : "<fn " + name + ">";
+}
+
 // `visiting` holds the arrays and maps currently being printed, so one that (directly or indirectly) contains itself prints "[...]" / "{...}" at the repeat instead of recursing until the stack overflows.
 static std::string stringifyImpl(const VMValue& value, std::vector<const void*>& visiting) {
     if (isVMNil(value)) return "nil";
@@ -29,13 +34,13 @@ static std::string stringifyImpl(const VMValue& value, std::vector<const void*>&
         return std::to_string(d);
     }
     if (isVMString(value)) return asVMString(value);
-    if (isVMClosure(value)) return "<fn " + asVMClosure(value)->function->name + ">";
-    if (isVMFunction(value)) return "<fn " + asVMFunction(value)->name + ">";
+    if (isVMClosure(value)) return functionLabel(asVMClosure(value)->function->name);
+    if (isVMFunction(value)) return functionLabel(asVMFunction(value)->name);
     if (isVMNative(value)) return "<native fn " + asVMNative(value)->name + ">";
     if (isVMClass(value)) return "<class " + asVMClass(value)->name + ">";
     if (isVMInstance(value)) return "<instance of " + asVMInstance(value)->klass->name + ">";
     if (isVMModule(value)) return "<module>";
-    if (isVMBoundMethod(value)) return "<fn " + asVMBoundMethod(value)->method->function->name + ">"; // a bound method prints like the plain function, as in the tree-walker
+    if (isVMBoundMethod(value)) return functionLabel(asVMBoundMethod(value)->method->function->name); // a bound method prints like the plain function, as in the tree-walker
     if (isVMArray(value)) {
         auto array = asVMArray(value);
         if (std::find(visiting.begin(), visiting.end(), array.get()) != visiting.end()) return "[...]";
