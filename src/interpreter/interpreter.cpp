@@ -96,9 +96,7 @@ void Interpreter::visitUnaryExpr(Unary& expr) {
     }
 }
 
-// Shared arithmetic logic for +, -, *, /, % — used by both plain binary
-// expressions (a + b) and compound assignment (a += b), so the two stay
-// perfectly consistent and this logic isn't duplicated.
+// Shared arithmetic logic for +, -, *, /, % — used by both plain binary expressions (a + b) and compound assignment (a += b), so the two stay perfectly consistent and this logic isn't duplicated.
 Value Interpreter::applyArithmeticOp(TokenType op, const Token& opToken, const Value& left, const Value& right) {
     switch (op) {
         case TokenType::MINUS:
@@ -118,8 +116,7 @@ Value Interpreter::applyArithmeticOp(TokenType op, const Token& opToken, const V
             if (std::get<double>(right) == 0.0) {
                 throw RuntimeError(opToken, "Modulo by zero.");
             }
-            // fmod (not integer %) since the language's only numeric type is double
-            // matches how JS's % works, including taking the sign of the dividend for negative operands
+            // fmod (not integer %) since the language's only numeric type is double matches how JS's % works, including taking the sign of the dividend for negative operands
             return std::fmod(std::get<double>(left), std::get<double>(right));
         case TokenType::PLUS:
             // '+' overloads: number+number adds, string+string concatenates
@@ -211,10 +208,8 @@ void Interpreter::visitCallExpr(Call& expr) {
     }
 
     auto function = std::get<std::shared_ptr<Callable>>(callee);
-    if (static_cast<int>(arguments.size()) != function->arity()) {
-        throw RuntimeError(expr.paren,
-            "Expected " + std::to_string(function->arity()) +
-            " arguments but got " + std::to_string(arguments.size()) + ".");
+    if (static_cast<int>(arguments.size()) < function->arity() || static_cast<int>(arguments.size()) > function->maxArity()) {
+        throw RuntimeError(expr.paren, arityMessage(function->arity(), function->maxArity(), arguments.size()));
     }
 
     result = function->call(*this, arguments);
@@ -322,8 +317,12 @@ void Interpreter::visitContinueStmt(ContinueStmt&) {
     loopSignal = LoopSignal::CONTINUE;
 }
 
+void Interpreter::visitFunctionExpr(FunctionExpr& expr) {
+    // Same as a named function, minus binding a name: the value is just the result of the expression.
+    result = std::make_shared<UserFunction>(expr.declaration.get(), environment);
+}
 void Interpreter::visitFunctionStmt(FunctionStmt& stmt) {
-    // Capture the CURRENT environment as the closure — this is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
+    // Capture the CURRENT environment as the closure - this is what lets the function later see variables from its defining scope even if called from somewhere else entirely.
     auto function = std::make_shared<UserFunction>(&stmt, environment);
     environment->define(stmt.name.lexeme, function);
 }
@@ -353,8 +352,7 @@ void Interpreter::visitClassStmt(ClassStmt& stmt) {
     // Two-step define/assign (like Lox) so a method body could in principle reference the class's own name.
     environment->define(stmt.name.lexeme, std::monostate{});
 
-    // If there's a superclass, methods are defined in a scope one level above their normal closure, with "super" bound in it
-    //this is the same trick UserFunction::bind() uses for "this", just for the class as a whole rather than per-instance.
+    // If there's a superclass, methods are defined in a scope one level above their normal closure, with "super" bound in it this is the same trick UserFunction::bind() uses for "this", just for the class as a whole rather than per-instance.
     std::shared_ptr<Environment> methodEnv = environment;
     if (superclass) {
         methodEnv = std::make_shared<Environment>(environment);
@@ -473,8 +471,7 @@ void Interpreter::visitIndexSetExpr(IndexSet& expr) {
             throw RuntimeError(expr.bracket, "Map key must be a string.");
         }
         auto map = std::get<std::shared_ptr<MapObject>>(objectValue);
-        // Unlike arrays (fixed positions, out-of-range is an error), maps grow freely
-        // assigning a new key inserts it, same as most scripting languages' dict/map assignment.
+        // Unlike arrays (fixed positions, out-of-range is an error), maps grow freely assigning a new key inserts it, same as most scripting languages' dict/map assignment.
         map->entries[std::get<std::string>(indexValue)] = newValue;
         result = newValue;
         return;

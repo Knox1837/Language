@@ -1,5 +1,4 @@
-// parser.h: declares Parser, which consumes the flat Token stream from the Lexer and builds a tree of Stmt/Expr nodes (the AST). Each grammar
-// rule (defined in parser.cpp) gets its own  method, following standard recursive-descent structure
+// parser.h: declares Parser, which consumes the flat Token stream from the Lexer and builds a tree of Stmt/Expr nodes (the AST). Each grammar rule (defined in parser.cpp) gets its own  method, following standard recursive-descent structure
 #pragma once
 #include <vector>
 #include <stdexcept>
@@ -28,7 +27,9 @@ private:
     StmtPtr declaration();      // "class" decl, "def" function, "var" declaration, or falls through to statement()
     StmtPtr importDeclaration(); // "import" STRING "as" IDENTIFIER ";"
     StmtPtr classDeclaration(); // "class" IDENTIFIER "{" function* "}"
-    std::unique_ptr<FunctionStmt> functionBody(const std::string& kind); // shared by top-level "def" and class methods
+    std::unique_ptr<FunctionStmt> functionBody(const std::string& kind); // shared by top-level "def" and class methods: name, then functionRest()
+    std::unique_ptr<FunctionStmt> functionRest(Token name, const std::string& kind); // after the "(": params? ")" block
+    ExprPtr functionExpression(); // "def" "(" params? ")" block, in expression position (an anonymous function); the "def" is already consumed
     StmtPtr functionDeclaration(); // "def" IDENTIFIER "(" params? ")" block -- wraps functionBody()
     StmtPtr varDeclaration();   // "var" IDENTIFIER ("=" expression)? ";"
     StmtPtr statement();        // dispatches to printStmt/ifStmt/whileStmt/returnStmt/block/exprStmt

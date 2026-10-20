@@ -2,11 +2,15 @@
 
 #include "native_function.h"
 
-NativeFunction::NativeFunction(std::string name, int arity, Fn fn)
-    : name(std::move(name)), arityCount(arity), fn(std::move(fn)) {}
+NativeFunction::NativeFunction(std::string name, int arity, Fn fn, int maxArity)
+    : name(std::move(name)), arityCount(arity), maxArityCount(maxArity < 0 ? arity : maxArity), fn(std::move(fn)) {}
 
 int NativeFunction::arity() const {
     return arityCount;
+}
+
+int NativeFunction::maxArity() const {
+    return maxArityCount;
 }
 
 Value NativeFunction::call(Interpreter& interpreter, std::vector<Value>& arguments) {

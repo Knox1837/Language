@@ -4,6 +4,7 @@
 #include "array_object.h"
 #include "environment.h" // for RuntimeError
 #include "../stdlib/native_function.h"
+#include "../stdlib/array_callbacks.h"
 #include <algorithm>
 
 static bool ascending(const Value& a, const Value& b, const std::string& fnName) {
@@ -58,11 +59,31 @@ Value getArrayMethod(std::shared_ptr<ArrayObject> array, const Token& name) {
             });
     }
     if (m == "sort") {
+        // arr.sort() or arr.sort(cmp): one optional argument, hence the range 0..1
         return std::make_shared<NativeFunction>("sort", 0,
-            [array](Interpreter&, std::vector<Value>&) -> Value {
+            [array](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+                if (args.size() == 1) return arraycb::sortWith(interpreter, array, args[0]);
                 std::sort(array->elements.begin(), array->elements.end(),
                           [](const Value& a, const Value& b) { return ascending(a, b, "sort"); });
                 return array;
+            }, 1);
+    }
+    if (m == "map") {
+        return std::make_shared<NativeFunction>("map", 1,
+            [array](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+                return arraycb::map(interpreter, array, args[0]);
+            });
+    }
+    if (m == "filter") {
+        return std::make_shared<NativeFunction>("filter", 1,
+            [array](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+                return arraycb::filter(interpreter, array, args[0]);
+            });
+    }
+    if (m == "reduce") {
+        return std::make_shared<NativeFunction>("reduce", 2,
+            [array](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+                return arraycb::reduce(interpreter, array, args[0], args[1]);
             });
     }
     if (m == "reverse") {

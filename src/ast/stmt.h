@@ -63,7 +63,7 @@ struct VarStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitVarStmt(*this); }
 };
 
-// { statement* }  — introduces a new variable scope
+// { statement* }  - introduces a new variable scope
 struct BlockStmt : Stmt {
     std::vector<StmtPtr> statements;
     explicit BlockStmt(std::vector<StmtPtr> statements) : statements(std::move(statements)) {}
@@ -102,6 +102,14 @@ struct FunctionStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitFunctionStmt(*this); }
 };
 
+// def(param1, param2) { body }   used as an EXPRESSION: an anonymous function that is a value like any other (assign it, pass it, return it).
+// It owns a FunctionStmt with an empty name, so the interpreter builds it the same way as a named function and only the binding of a name is skipped. Same lifetime rule as FunctionStmt: the AST must outlive every function created from it.
+struct FunctionExpr : Expr {
+    std::unique_ptr<FunctionStmt> declaration;
+    explicit FunctionExpr(std::unique_ptr<FunctionStmt> declaration) : declaration(std::move(declaration)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitFunctionExpr(*this); }
+};
+
 // return expression;   or just   return;  (value may be null -> returns nil)
 struct ReturnStmt : Stmt {
     Token keyword; // the "return" token, kept for line-number reporting
@@ -124,7 +132,7 @@ struct ClassStmt : Stmt {
 // import "path/to/file.mylang" as name;
 struct ImportStmt : Stmt {
     Token path;  // the STRING token holding the file path, as written in source
-    Token alias; // the IDENTIFIER after "as" — what the module is bound to locally
+    Token alias; // the IDENTIFIER after "as" - what the module is bound to locally
     ImportStmt(Token path, Token alias) : path(std::move(path)), alias(std::move(alias)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitImportStmt(*this); }
 };

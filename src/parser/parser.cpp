@@ -103,7 +103,17 @@ StmtPtr Parser::classDeclaration() {
 std::unique_ptr<FunctionStmt> Parser::functionBody(const std::string& kind) {
     Token name = consume(TokenType::IDENTIFIER, "Expect " + kind + " name.");
     consume(TokenType::LEFT_PAREN, "Expect '(' after " + kind + " name.");
+    return functionRest(std::move(name), kind);
+}
 
+ExprPtr Parser::functionExpression() {
+    Token keyword = previous(); // the "def"
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'def' in a function expression.");
+    Token name(TokenType::IDENTIFIER, "", keyword.line); // anonymous: an empty name, which is how it prints as <fn>
+    return std::make_unique<FunctionExpr>(functionRest(std::move(name), "function"));
+}
+
+std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string& kind) {
     std::vector<Token> params;
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
@@ -459,6 +469,7 @@ ExprPtr Parser::primary() {
     if (match({TokenType::TRUE})) return std::make_unique<Literal>(LiteralValue{true});
     if (match({TokenType::NIL})) return std::make_unique<Literal>(LiteralValue{std::monostate{}});
     if (match({TokenType::THIS})) return std::make_unique<This>(previous());
+    if (match({TokenType::DEF})) return functionExpression();
 
     if (match({TokenType::SUPER})) {
         Token keyword = previous();

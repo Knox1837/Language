@@ -1,5 +1,4 @@
-// expr.h — defines every kind of EXPRESSION node in the AST 
-//(things that  produce a value: 1 + 2, x, "hello", (a == b), x = 5, etc).
+// expr.h - defines every kind of EXPRESSION node in the AST (things that  produce a value: 1 + 2, x, "hello", (a == b), x = 5, etc).
 #pragma once
 #include <memory>
 #include <string>
@@ -25,6 +24,7 @@ struct IndexSet;
 struct MapLiteral;
 struct CompoundSet;
 struct CompoundIndexSet;
+struct FunctionExpr; // defined in stmt.h, next to FunctionStmt, because it owns one
 
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
@@ -43,6 +43,7 @@ struct ExprVisitor {
     virtual void visitSetExpr(Set& expr) = 0;
     virtual void visitThisExpr(This& expr) = 0;
     virtual void visitSuperExpr(Super& expr) = 0;
+    virtual void visitFunctionExpr(FunctionExpr& expr) = 0;
     virtual void visitArrayLiteralExpr(ArrayLiteral& expr) = 0;
     virtual void visitIndexExpr(Index& expr) = 0;
     virtual void visitIndexSetExpr(IndexSet& expr) = 0;

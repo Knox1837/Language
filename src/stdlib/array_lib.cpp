@@ -1,6 +1,7 @@
 // array_lib.cpp: implements the built-in array functions (push, pop, length, contains, indexOf, sort, reverse, slice)
 #include "array_lib.h"
 #include "native_function.h"
+#include "array_callbacks.h"
 #include "../interpreter/array_object.h"
 #include "../interpreter/map_object.h"
 #include <algorithm>
@@ -24,7 +25,7 @@ static bool ascending(const Value& a, const Value& b, const std::string& fnName)
 }
 
 void registerArrayLib(std::shared_ptr<Environment> globals) {
-    // push(arr, value) — appends in place, returns the array's new length
+    // push(arr, value) - appends in place, returns the array's new length
     globals->define("push", Value{std::make_shared<NativeFunction>(
         "push", 2,
         [](Interpreter&, std::vector<Value>& args) -> Value {
@@ -62,7 +63,7 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
         }
     )});
 
-    // contains(arr, value) — true if value appears anywhere in the array
+    // contains(arr, value) - true if value appears anywhere in the array
     globals->define("contains", Value{std::make_shared<NativeFunction>(
         "contains", 2,
         [](Interpreter&, std::vector<Value>& args) -> Value {
@@ -74,7 +75,7 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
         }
     )});
 
-    // indexOf(arr, value) — first matching index, or -1 if not found
+    // indexOf(arr, value) - first matching index, or -1 if not found
     globals->define("indexOf", Value{std::make_shared<NativeFunction>(
         "indexOf", 2,
         [](Interpreter&, std::vector<Value>& args) -> Value {
@@ -86,19 +87,42 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
         }
     )});
 
-    // sort(arr) — ascending sort IN PLACE; numbers or strings only (see ascending())
+    // sort(arr) - ascending sort IN PLACE; numbers or strings only (see ascending())
     // uses introsort O(n log n) with std::sort, which is a hybrid of quicksort, heapsort, and insertion sort.
+    // sort(arr, cmp) - sorts with a comparator instead (stable merge sort, see array_callbacks.h), so this takes one or two arguments.
     globals->define("sort", Value{std::make_shared<NativeFunction>(
         "sort", 1,
-        [](Interpreter&, std::vector<Value>& args) -> Value {
+        [](Interpreter& interpreter, std::vector<Value>& args) -> Value {
             auto array = requireArray("sort", args[0]);
+            if (args.size() == 2) return arraycb::sortWith(interpreter, array, args[1]);
             std::sort(array->elements.begin(), array->elements.end(),
                       [](const Value& a, const Value& b) { return ascending(a, b, "sort"); });
             return args[0]; // returns the same array, for chaining like print(sort(arr))
+        },
+        2
+    )});
+
+    // map(arr, f), filter(arr, f), reduce(arr, f, initial): see array_callbacks.h
+    globals->define("map", Value{std::make_shared<NativeFunction>(
+        "map", 2,
+        [](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+            return arraycb::map(interpreter, requireArray("map", args[0]), args[1]);
+        }
+    )});
+    globals->define("filter", Value{std::make_shared<NativeFunction>(
+        "filter", 2,
+        [](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+            return arraycb::filter(interpreter, requireArray("filter", args[0]), args[1]);
+        }
+    )});
+    globals->define("reduce", Value{std::make_shared<NativeFunction>(
+        "reduce", 3,
+        [](Interpreter& interpreter, std::vector<Value>& args) -> Value {
+            return arraycb::reduce(interpreter, requireArray("reduce", args[0]), args[1], args[2]);
         }
     )});
 
-    // reverse(arr) — reverses IN PLACE, returns the same array
+    // reverse(arr) - reverses IN PLACE, returns the same array
     globals->define("reverse", Value{std::make_shared<NativeFunction>(
         "reverse", 1,
         [](Interpreter&, std::vector<Value>& args) -> Value {
@@ -127,8 +151,7 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
             return result;
         }
     )});
-    // binarySearch(arr, value): assumes arr is already sorted ascending 
-    // Returns the matching index, or -1 if not found.
+    // binarySearch(arr, value): assumes arr is already sorted ascending. Returns the matching index, or -1 if not found.
     globals->define("binarySearch", Value{std::make_shared<NativeFunction>(
         "binarySearch", 2,
         [](Interpreter&, std::vector<Value>& args) -> Value {

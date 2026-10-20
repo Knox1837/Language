@@ -1,6 +1,5 @@
-// ast_printer.h — a small ExprVisitor/StmtVisitor implementation that converts the AST back into a readable, parenthesized string
-// e.g. "1 + 2 * 3" prints as "(+ 1 (* 2 3))". 
-// to see the AST structure, not the original source code. Useful for debugging the parser.
+// ast_printer.h - a small ExprVisitor/StmtVisitor implementation that converts the AST back into a readable, parenthesized string
+// To see the AST structure, not the original source code. Useful for debugging the parser.
 #pragma once
 #include <string>
 #include <sstream>
@@ -23,6 +22,7 @@ public:
     void visitGetExpr(Get& expr) override;
     void visitSetExpr(Set& expr) override;
     void visitThisExpr(This& expr) override;
+    void visitFunctionExpr(FunctionExpr& expr) override;
     void visitSuperExpr(Super& expr) override;
     void visitArrayLiteralExpr(ArrayLiteral& expr) override;
     void visitIndexExpr(Index& expr) override;
@@ -47,8 +47,7 @@ public:
 private:
     std::string result; // visit methods write here; print() reads it back out
 
-    // helper: wraps a name and any number of child exprs as "(name child1 child2 ...)"
-    // Defined inline here (not in the .cpp) because template definitions must be visible at every call site
+    // helper: wraps a name and any number of child exprs as "(name child1 child2 ...)". Defined inline here (not in the .cpp) because template definitions must be visible at every call site
     template <typename... Exprs>
     std::string parenthesize(const std::string& name, Exprs&... exprs) {
         std::ostringstream out;

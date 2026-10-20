@@ -73,6 +73,16 @@ void ASTPrinter::visitSetExpr(Set& expr) {
 void ASTPrinter::visitThisExpr(This&) {
     result = "this";
 }
+void ASTPrinter::visitFunctionExpr(FunctionExpr& expr) {
+    std::ostringstream out;
+    out << "(fn (";
+    for (size_t i = 0; i < expr.declaration->params.size(); i++) {
+        if (i > 0) out << " ";
+        out << expr.declaration->params[i].lexeme;
+    }
+    out << "))";
+    result = out.str();
+}
 
 void ASTPrinter::visitSuperExpr(Super& expr) {
     result = "(super " + expr.method.lexeme + ")";

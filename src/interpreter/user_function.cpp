@@ -1,4 +1,4 @@
-// user_function.cpp — implements calling a user-defined function
+// user_function.cpp: implements calling a user-defined function
 
 #include "user_function.h"
 #include "interpreter.h"
@@ -13,16 +13,14 @@ int UserFunction::arity() const {
 }
 
 std::shared_ptr<UserFunction> UserFunction::bind(std::shared_ptr<LoxInstance> instance) {
-    // A fresh scope, one level above the method's own parameter scope, chained to the ORIGINAL closure so the method still sees whatever
-    // it could already see (e.g. globals) — with `this` added on top.
+    // A fresh scope, one level above the method's own parameter scope, chained to the ORIGINAL closure so the method still sees whatever it could already see (e.g. globals) — with `this` added on top.
     auto env = std::make_shared<Environment>(closure);
     env->define("this", Value{instance});
     return std::make_shared<UserFunction>(declaration, env, isInitializer);
 }
 
 Value UserFunction::call(Interpreter& interpreter, std::vector<Value>& arguments) {
-    // New scope for this call, chained to the closure (where the function
-    // was DEFINED / bound), not the caller's environment.
+    // New scope for this call, chained to the closure (where the function was DEFINED / bound), not the caller's environment.
     auto callEnv = std::make_shared<Environment>(closure);
 
     for (size_t i = 0; i < declaration->params.size(); i++) {
@@ -30,8 +28,7 @@ Value UserFunction::call(Interpreter& interpreter, std::vector<Value>& arguments
     }
 
     if (isInitializer) {
-        // init() always returns `this`, regardless of what (if anything)
-        // it explicitly returns — matches Lox's / Python's __init__ convention that a constructor's return value isn't used.
+        // init() always returns `this`, regardless of what (if anything) it explicitly returns - matches Lox's / Python's __init__ convention that a constructor's return value isn't used.
         Token thisToken(TokenType::THIS, "this", declaration->name.line);
         try {
             interpreter.executeBlock(declaration->body, callEnv);
@@ -51,5 +48,6 @@ Value UserFunction::call(Interpreter& interpreter, std::vector<Value>& arguments
 }
 
 std::string UserFunction::toString() const {
+    if (declaration->name.lexeme.empty()) return "<fn>"; // an anonymous function (def(x) { ... })
     return "<fn " + declaration->name.lexeme + ">";
 }

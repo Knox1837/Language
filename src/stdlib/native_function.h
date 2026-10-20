@@ -17,14 +17,17 @@ class NativeFunction : public Callable {
 public:
     using Fn = std::function<Value(Interpreter&, std::vector<Value>&)>;
 
-    NativeFunction(std::string name, int arity, Fn fn);
+    // `maxArity` is only given by a native that takes optional arguments (arity..maxArity); by default it takes exactly `arity`.
+    NativeFunction(std::string name, int arity, Fn fn, int maxArity = -1);
 
     int arity() const override;
+    int maxArity() const override;
     Value call(Interpreter& interpreter, std::vector<Value>& arguments) override;
     std::string toString() const override;
 
 private:
     std::string name;
     int arityCount;
+    int maxArityCount;
     Fn fn;
 };
