@@ -100,6 +100,7 @@ importDecl  -> "import" STRING "as" IDENTIFIER ";"
 classDecl   -> "class" IDENTIFIER ( "<" IDENTIFIER )? "{" method* "}"
 method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
+funExpr     -> "def" "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
@@ -128,7 +129,7 @@ unary       -> ( "!" | "-" ) unary | call
 call        -> primary ( "(" arguments? ")" | "." IDENTIFIER | "[" expression "]" )*
 arguments   -> expression ( "," expression )*
 primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
-             | "(" expression ")" | IDENTIFIER | "super" "." IDENTIFIER
+             | "(" expression ")" | IDENTIFIER | "super" "." IDENTIFIER | funExpr
              | "[" ( expression ( "," expression )* )? "]"
              | "{" ( STRING ":" expression ( "," STRING ":" expression )* )? "}"
 ```
@@ -238,6 +239,35 @@ var counter = makeCounter();
 print counter(); // 1
 print counter(); // 2
 ```
+
+## Function expressions
+
+`def` with no name, followed straight away by a parameter list, is an
+*expression*: an anonymous function that is a value like any other.
+
+```
+var double = def(x) { return x * 2; };
+print double(21);                         // 42
+print def(a, b) { return a + b; }(3, 4);  // 7 -- called right where it is written
+print double;                             // <fn>   (a named function prints as <fn name>)
+```
+
+- It is a closure, exactly like a named function: it captures the variables
+  of the scopes around it, and each call of the function that creates it gets
+  its own copy of them.
+- Being a value, it can be stored in a variable, an array, a map or an
+  instance field, passed to a function, and returned from one.
+  `makeAdder(5)(10)` and `table["neg"](5)` call the function they produce.
+- It cannot be a statement on its own: a statement that starts with `def` is
+  a function *declaration* and needs a name, so `def(x) { ... };` is the error
+  `Expect function name.` Store it in a variable or pass it somewhere.
+- It has no name to call itself by. Recurse through the variable it is stored
+  in: `var fact = def(n) { if (n <= 1) { return 1; } return n * fact(n - 1); };`
+  works at the top level and inside a function.
+- `break` and `continue` inside one belong to the loops inside it, never to a
+  loop that surrounds the function expression.
+- `map`, `filter`, `reduce` and `sort` with a comparator take functions like
+  this; see the Arrays section.
 
 ## Classes
 
@@ -464,9 +494,40 @@ globally in every script — no import needed.
 | `contains(arr, x)` | array, any → bool | true if `x` appears anywhere in the array |
 | `indexOf(arr, x)` | array, any → number | first matching index, or `-1` |
 | `sort(arr)` | array → array | ascending, **in place**; numbers-only or strings-only (mixed types error) |
+| `sort(arr, cmp)` | array, function → array | sorts **in place** by a comparator; stable. See "Functions that take a function" below |
 | `reverse(arr)` | array → array | in place |
 | `slice(arr, start, end)` | array, number, number → array | returns a **new** array, end-exclusive; does not mutate the original |
 | `binarySearch(arr, x)` | array, any → number | O(log n); **assumes `arr` is already sorted ascending** — call `sort()` first |
+| `map(arr, f)` | array, function → array | a **new** array of `f(element)` for every element |
+| `filter(arr, f)` | array, function → array | a **new** array of the elements for which `f(element)` is truthy |
+| `reduce(arr, f, initial)` | array, function, any → any | `acc = initial`, then `acc = f(acc, element)` for each element, left to right; returns `acc` (an empty array gives `initial`) |
+
+**Functions that take a function** (`map`, `filter`, `reduce`, `sort` with a
+comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
+`arr.reduce(f, initial)`, `arr.sort(cmp)`, so calls chain:
+`nums.filter(def(x) { return x > 2; }).map(def(x) { return x * 10; })`.
+
+- `f` can be any callable value: a `def` function, a function expression, a
+  built-in such as `str` or `len`, a class (its constructor is called), or a
+  bound method (`map(xs, obj.scale)`).
+- `map` and `filter` call it with one argument (the element); `reduce` with two
+  (the accumulator, then the element); a `sort` comparator with two elements.
+  A function that takes a different number of parameters is the usual error:
+  `Expected 2 arguments but got 1.`
+- `filter` uses the language's truthiness (see Truthiness): only `false` and
+  `nil` drop an element, so a callback that returns `0` keeps it.
+- A **comparator** `cmp(a, b)` returns a number: negative if `a` belongs before
+  `b`, positive if `a` belongs after `b`, zero if they are equal. Equal elements
+  keep their original order (the sort is stable). Returning anything but a
+  number is the error `Comparator must return a number.` A comparator that
+  makes no sense (always `1`, say) gives some order, never a crash.
+- They work on a **snapshot** of the array taken when they start, so a
+  callback that pushes to or pops from the array being processed does not
+  disturb the loop. A sort replaces the array's contents only when it
+  finishes, so a comparator that fails leaves the array as it was.
+- An error inside a callback stops the program and is reported once, with the
+  line of the callback.
+- `sort(arr)` with no comparator is unchanged.
 
 **Maps**
 
@@ -517,9 +578,6 @@ interpreter does not define them.
 Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
-- **Function expressions / lambdas:** functions can only be declared with
-  `def name(...) { ... }`, so there is no anonymous function to pass to a
-  helper like `map` or `filter`, and `sort` takes no comparator.
 - **Raising and handling errors from a script:** no `try`/`catch`, no
   `error(...)` function. Every runtime error stops the program.
 - **File I/O:** no way to read or write a file from a script (`input()` reads

@@ -714,6 +714,67 @@ superclass.", and "A class can't inherit from itself.". The tree-walker
 has no such checks; it finds out at run time ("Undefined variable
 'this'."). See "Known differences from the tree-walker".
 
+## Design note: function expressions and calling script code from natives
+
+**Function expressions** (`def(x) { ... }` in expression position) are one new
+prefix rule in each engine. The VM compiles the body with the same
+`functionBody()` as a named function (a flag only changes the error message for
+a missing `(`) and leaves the closure on the stack, which is the value of the
+expression. The tree-walker has a `FunctionExpr` node that owns a `FunctionStmt`
+with an empty name and builds a `UserFunction` from it, minus defining a name.
+An empty name prints as `<fn>` in both. A statement starting with `def` is still
+a declaration, so an anonymous function cannot be a statement by itself.
+
+**Recursion through a local variable.** `var g = def(n) { ... g(n - 1) ... };`
+inside a function used to be a VM compile error ("Cannot read a local variable
+in its own initializer") while the tree-walker, which looks names up at call
+time, accepted it. A named local function avoids the error because its name is
+marked initialized before its body is compiled. `varDeclaration` now does the
+same when the initializer starts with `def` (and only then: any other
+initializer that mentions its own variable is still the error). It is safe
+because the slot is only read once the closure exists and sits in it.
+
+**Natives that call back into script code** (`map`, `filter`, `reduce`, `sort`
+with a comparator). The tree-walker's natives already receive the `Interpreter`,
+so they simply call `callable->call(interpreter, args)`, and an error inside the
+callback is a C++ exception passing through the native. The VM needed a real
+mechanism:
+- `VM::callFunction(callee, args, result)` pushes the callee and arguments like
+  `OP_CALL` would, calls `callValue`, and, if that pushed a `CallFrame`, runs
+  `run(baseFrames)` until that frame has returned. `run` takes the number of
+  frames at entry: `OP_RETURN` returns from `run` when the frame count drops back
+  to it, leaving the result on the stack. For the whole program the value is 0
+  and the existing `frames.empty()` check does the job. Callees that are natives,
+  or classes without `init()`, push no frame and are already finished.
+- Natives are plain functions with no VM parameter, so they reach the VM through
+  `VM::active()`, set (and restored) for the duration of `interpret()`.
+- **Errors are reported once.** `runtimeError` prints, unwinds everything and sets
+  `errorReported`. A callback that fails returns `false` from `callFunction`; the
+  native returns `false` with an EMPTY message, and `callValue` skips its own
+  `runtimeError` when the flag is set (it would print a second, empty error with
+  line -1). `interpret()` clears the flag.
+- **Snapshots.** Every operation iterates over a copy of the elements, because a
+  callback is arbitrary script code and may push to the array being processed.
+  `sort` sorts a copy and assigns it back only on success.
+- **The collector needs nothing special.** The native's locals (the snapshot, the
+  result array, the accumulator) are `shared_ptr`s, so they count as references
+  from outside the heap, and collection may happen inside a nested `run`. This was
+  checked with the stress build, which collects between almost every pair of
+  instructions.
+- **The sort** (`util/merge_sort.h`, shared by both engines) is a stable bottom-up
+  merge sort, not `std::sort`: `std::sort` assumes a strict weak ordering and can
+  read out of bounds when a user comparator is inconsistent. A merge sort only
+  moves elements between two buffers, so a nonsensical comparator gives a
+  nonsensical order but no memory error, and both engines give the same order.
+  The comparison is `greater(left, right)`: an element is taken from the right
+  run only when the comparator says the left one must come after it.
+- **Optional arguments.** `sort(arr)` and `sort(arr, cmp)` needed natives with a
+  range of argument counts: `Callable::maxArity()` in the tree-walker and
+  `VMNative::maxArity` in the VM (-1 means exactly `arity`). The error reads
+  "Expected 1 or 2 arguments but got 3." Only `sort` uses it so far.
+- A callback may itself call `map` or `sort`: the C++ stack grows by one nested
+  `run` per level, so (as with deep recursion) very deep nesting can overflow it.
+
 ## Design note: break and continue
 
 Both engines implement them with the same rules (see "Break and continue" in

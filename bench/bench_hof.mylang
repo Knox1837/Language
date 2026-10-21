@@ -1,0 +1,15 @@
+// Higher-order array functions: map, filter, reduce, and sort with a comparator (every element makes a native call back into a script function).
+var nums = [];
+for (var i = 0; i < 200000; i = i + 1) {
+  push(nums, (i * 7919) % 10007);
+}
+var squares = map(nums, def(x) { return x * x % 1000; });
+var big = filter(squares, def(x) { return x > 500; });
+var total = reduce(squares, def(acc, x) { return acc + x; }, 0);
+var part = slice(nums, 0, 20000);
+var sorted = sort(part, def(a, b) { return a - b; });
+print length(squares);
+print length(big);
+print total;
+print sorted[0];
+print sorted[length(sorted) - 1];
