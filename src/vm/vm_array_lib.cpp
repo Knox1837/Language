@@ -4,7 +4,7 @@
 #include "vm_map.h"
 #include "vm.h"
 #include "vm_native.h"
-#include "../util/merge_sort.h"
+#include "../util/tim_sort.h"
 #include <algorithm>
 #include <cmath>
 
@@ -145,7 +145,7 @@ bool opReduce(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& result
     return true;
 }
 
-// sort(cmp): cmp(a, b) returns a number: negative if a belongs before b, positive if after, zero if equal (the original order is kept: the sort is stable).
+// sort(cmp): cmp(a, b) returns a number: negative if a belongs before b, positive if after, zero if equal (the original order is kept: Timsort is stable).
 // It sorts a COPY and replaces the array's contents only when it finishes, so an error in the comparator leaves the array exactly as it was.
 bool sortWithComparator(const ArrayPtr& array, const VMValue& cmp, VMValue& result, std::string& error) {
     if (!isCallable(cmp)) { error = kFunctionError; return false; }
@@ -153,8 +153,8 @@ bool sortWithComparator(const ArrayPtr& array, const VMValue& cmp, VMValue& resu
     std::vector<VMValue> items = array->elements;
     bool failed = false;
     std::string failure; // set only for an error the comparator's caller must report (a non-number); empty if the error inside the callback was already reported
-    stableMergeSort(items, [&](const VMValue& a, const VMValue& b) {
-        if (failed) return false; // after a failure the merge just finishes quickly without calling anything
+    timSort(items, [&](const VMValue& a, const VMValue& b) {
+        if (failed) return false; // after a failure the sort just finishes quickly without calling anything
         VMValue verdict;
         if (!vm->callFunction(cmp, {a, b}, verdict)) { failed = true; return false; }
         if (!isVMNumber(verdict)) {
@@ -162,7 +162,7 @@ bool sortWithComparator(const ArrayPtr& array, const VMValue& cmp, VMValue& resu
             failure = "Comparator must return a number.";
             return false;
         }
-        return asVMNumber(verdict) > 0;
+        return asVMNumber(verdict) < 0; // Timsort only asks "does a come strictly before b?"
     });
     if (failed) {
         error = failure;
@@ -189,7 +189,7 @@ bool opSort(const ArrayPtr& array, std::vector<VMValue>& rest, VMValue& result, 
             error = kOrderError;
             return false;
         }
-        std::sort(elements.begin(), elements.end(), [](const VMValue& a, const VMValue& b) { return lessThan(a, b); });
+        timSort(elements, [](const VMValue& a, const VMValue& b) { return lessThan(a, b); }); // stable; the ordering is valid (NaN last), and cannot fail after the check above
     }
     result = array;
     return true;

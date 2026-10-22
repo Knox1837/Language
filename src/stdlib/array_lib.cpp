@@ -95,9 +95,7 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
         [](Interpreter& interpreter, std::vector<Value>& args) -> Value {
             auto array = requireArray("sort", args[0]);
             if (args.size() == 2) return arraycb::sortWith(interpreter, array, args[1]);
-            std::sort(array->elements.begin(), array->elements.end(),
-                      [](const Value& a, const Value& b) { return ascending(a, b, "sort"); });
-            return args[0]; // returns the same array, for chaining like print(sort(arr))
+            return arraycb::sortNatural(array); // returns the same array, for chaining like print(sort(arr))
         },
         2
     )});
@@ -151,6 +149,7 @@ void registerArrayLib(std::shared_ptr<Environment> globals) {
             return result;
         }
     )});
+
     // binarySearch(arr, value): assumes arr is already sorted ascending. Returns the matching index, or -1 if not found.
     globals->define("binarySearch", Value{std::make_shared<NativeFunction>(
         "binarySearch", 2,

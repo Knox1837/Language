@@ -1,16 +1,12 @@
-// array_callbacks.h: the array operations that take a FUNCTION: map, filter, reduce, and sort with a comparator.
-// Written once here and used by both forms of each: the free function (map(arr, f), in array_lib.cpp) and the bound method (arr.map(f), in array_methods.cpp).
-//
-// How a callback is called: a native function receives the Interpreter, so it calls a script function like any Callable: callable->call(interpreter, args). A runtime error inside the callback is a C++ exception that simply passes through the native on its way to the top level, which reports it once.
-// The callback is called with exactly the arguments documented for each operation (map/filter: the element; reduce: accumulator, element; sort: two elements). A function that takes a different number is an arity error, reported like any wrong-arity call.
-// Every operation works on a SNAPSHOT of the elements, so a callback that modifies the array being processed (pushes to it, say) cannot invalidate the loop.
+// array_callbacks.h: the array operations that take a FUNCTION (map, filter, reduce, and sort with a comparator), and the plain sort(arr).
 #pragma once
+#include <cmath>
 #include <string>
 #include <vector>
 #include "native_function.h"
 #include "../interpreter/array_object.h"
 #include "../interpreter/callable.h"
-#include "../util/merge_sort.h"
+#include "../util/tim_sort.h"
 
 namespace arraycb {
 
@@ -62,19 +58,42 @@ inline Value reduce(Interpreter& interpreter, const std::shared_ptr<ArrayObject>
     return accumulator;
 }
 
-// sort(arr, cmp): sorts IN PLACE, stably, and returns the same array. cmp(a, b) returns a number: negative if a belongs before b, positive if after, zero if they are equal (their order is kept).
+// sort(arr, cmp): sorts IN PLACE with Timsort (stable), and returns the same array. cmp(a, b) returns a number: negative if a belongs before b, positive if after, zero if they are equal (their order is kept).
 // The sort runs on a copy that replaces the array only when it finishes, so an error in the comparator leaves the array exactly as it was.
 inline Value sortWith(Interpreter& interpreter, const std::shared_ptr<ArrayObject>& array, const Value& cmpValue) {
     auto fn = requireFunction("sort", cmpValue);
     std::vector<Value> items = array->elements;
-    stableMergeSort(items, [&](const Value& a, const Value& b) {
+    timSort(items, [&](const Value& a, const Value& b) {
         Value verdict = callWith(interpreter, "sort", fn, {a, b});
         if (!std::holds_alternative<double>(verdict)) {
             throw nativeError("sort", "Comparator must return a number.");
         }
-        return std::get<double>(verdict) > 0;
+        return std::get<double>(verdict) < 0; // Timsort only asks "does a come strictly before b?"
     });
     array->elements = std::move(items);
+    return array;
+}
+
+// sort(arr): ascending, IN PLACE, stable, for an array of all numbers or all strings (anything else is an error, found before anything moves). NaN sorts after every other number, which keeps this a valid ordering.
+inline Value sortNatural(const std::shared_ptr<ArrayObject>& array) {
+    auto& elements = array->elements;
+    if (elements.size() >= 2) {
+        bool allNumbers = true, allStrings = true;
+        for (const Value& element : elements) {
+            allNumbers = allNumbers && std::holds_alternative<double>(element);
+            allStrings = allStrings && std::holds_alternative<std::string>(element);
+        }
+        if (!allNumbers && !allStrings) throw nativeError("sort", "Can only sort arrays of all-numbers or all-strings.");
+        timSort(elements, [](const Value& a, const Value& b) {
+            if (std::holds_alternative<double>(a)) {
+                const double x = std::get<double>(a), y = std::get<double>(b);
+                if (std::isnan(x)) return false;
+                if (std::isnan(y)) return true;
+                return x < y;
+            }
+            return std::get<std::string>(a) < std::get<std::string>(b);
+        });
+    }
     return array;
 }
 

@@ -63,9 +63,7 @@ Value getArrayMethod(std::shared_ptr<ArrayObject> array, const Token& name) {
         return std::make_shared<NativeFunction>("sort", 0,
             [array](Interpreter& interpreter, std::vector<Value>& args) -> Value {
                 if (args.size() == 1) return arraycb::sortWith(interpreter, array, args[0]);
-                std::sort(array->elements.begin(), array->elements.end(),
-                          [](const Value& a, const Value& b) { return ascending(a, b, "sort"); });
-                return array;
+                return arraycb::sortNatural(array);
             }, 1);
     }
     if (m == "map") {
