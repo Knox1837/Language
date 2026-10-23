@@ -493,8 +493,8 @@ globally in every script — no import needed.
 | `length(arr)` | array → number | number of elements (separate from `len`, which is string-only); also accepts maps — see Maps section below |
 | `contains(arr, x)` | array, any → bool | true if `x` appears anywhere in the array |
 | `indexOf(arr, x)` | array, any → number | first matching index, or `-1` |
-| `sort(arr)` | array → array | ascending, **in place**; numbers-only or strings-only (mixed types error) |
-| `sort(arr, cmp)` | array, function → array | sorts **in place** by a comparator; stable. See "Functions that take a function" below |
+| `sort(arr)` | array → array | ascending, **in place**, stable (Timsort); numbers-only or strings-only (mixed types error, and nothing is moved); a NaN sorts after every other number; an array of fewer than two elements is accepted whatever it holds |
+| `sort(arr, cmp)` | array, function → array | sorts **in place** by a comparator (also Timsort, stable). See "Functions that take a function" below |
 | `reverse(arr)` | array → array | in place |
 | `slice(arr, start, end)` | array, number, number → array | returns a **new** array, end-exclusive; does not mutate the original |
 | `binarySearch(arr, x)` | array, any → number | O(log n); **assumes `arr` is already sorted ascending** — call `sort()` first |
@@ -527,7 +527,7 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
   finishes, so a comparator that fails leaves the array as it was.
 - An error inside a callback stops the program and is reported once, with the
   line of the callback.
-- `sort(arr)` with no comparator is unchanged.
+- Both forms of `sort` use Timsort: it is stable, it needs only about `n` comparisons for an array that is already sorted or reversed, and at most about `n log n` for any array. Calling `cmp` fewer times matters when `cmp` is a script function.
 
 **Maps**
 

@@ -761,19 +761,80 @@ mechanism:
   from outside the heap, and collection may happen inside a nested `run`. This was
   checked with the stress build, which collects between almost every pair of
   instructions.
-- **The sort** (`util/merge_sort.h`, shared by both engines) is a stable bottom-up
-  merge sort, not `std::sort`: `std::sort` assumes a strict weak ordering and can
-  read out of bounds when a user comparator is inconsistent. A merge sort only
-  moves elements between two buffers, so a nonsensical comparator gives a
-  nonsensical order but no memory error, and both engines give the same order.
-  The comparison is `greater(left, right)`: an element is taken from the right
-  run only when the comparator says the left one must come after it.
+- **The sort** is Timsort (`util/tim_sort.h`, one header shared by both engines, used
+  for `sort(arr)` and `sort(arr, cmp)`), not `std::sort`. `std::sort` assumes a
+  strict weak ordering and can read out of bounds when a user comparator is
+  inconsistent. See "Design note: Timsort" below.
 - **Optional arguments.** `sort(arr)` and `sort(arr, cmp)` needed natives with a
   range of argument counts: `Callable::maxArity()` in the tree-walker and
   `VMNative::maxArity` in the VM (-1 means exactly `arity`). The error reads
   "Expected 1 or 2 arguments but got 3." Only `sort` uses it so far.
 - A callback may itself call `map` or `sort`: the C++ stack grows by one nested
   `run` per level, so (as with deep recursion) very deep nesting can overflow it.
+
+## Design note: Timsort
+
+`util/tim_sort.h` is a port of CPython's `listsort` (Tim Peters's Timsort), used
+for BOTH forms of `sort` in BOTH engines, so they always produce the same order.
+It replaced `std::sort` for the plain `sort(arr)` and a stable merge sort that
+was briefly used for comparators.
+
+**The algorithm.**
+1. Scan for natural runs: a non-descending run, or a strictly descending one,
+   which is reversed in place (strictness is what keeps the sort stable).
+2. A run shorter than the "minrun" (32 to 64, chosen from `n` so the final merges
+   balance) is extended to that length with a binary insertion sort.
+3. Runs go on a stack and are merged to keep their lengths balanced, using the
+   corrected invariants of CPython 3.x and Java (the original ones were proved
+   wrong in 2015).
+4. A merge first trims what is already in place (`gallopRight` for where B's first
+   element lands in A, `gallopLeft` for where A's last lands in B), copies the
+   SHORTER run to a buffer, and merges towards it (`mergeLow` / `mergeHigh`).
+   When one side wins several times in a row it switches to galloping
+   (exponential search) and skips many elements per comparison; the threshold
+   adapts as the sort goes.
+
+Only `less(a, b)` ("a is strictly before b") is ever called. A comparator
+`cmp(a, b)` becomes `cmp(a, b) < 0`; zero and positive both mean "not before",
+which is what makes equal elements keep their order.
+
+**Cost, measured** (optimized build, VM, the sort call alone, against what it
+replaced): 400,000 random numbers 9% faster than `std::sort`; a comparator sort
+of 60,000 elements 27% faster than the merge sort it replaced; 400,000
+already-sorted numbers about 10x faster than `std::sort` (25 ms to 2.6 ms),
+because the whole array is one run. On random data Timsort used 1.53 million
+comparisons for 100,000 elements, below the n·log2(n) of about 1.66 million that a
+textbook merge sort needs, which matters most when the comparator is a script
+function.
+
+**Safe with any comparator.** The comparator is user code and can be nonsense
+(always true, random, cyclic). Every count and index in the merges is bounded by
+the lengths involved and checked before use, as CPython does, so a bad
+comparator can only give a bad ORDER: no out-of-range access, and the result is
+always a permutation of the input.
+
+**Errors.** A comparator written in the language can fail, which in the
+tree-walker is a C++ exception passing through the sort and in the VM a
+`failed` flag. Either way `sort(arr, cmp)` sorts a COPY and puts it in the array
+only when it finishes, so the array is untouched if the comparator fails.
+
+**The plain sort** (`sortNatural` in `array_callbacks.h`, and `opSort` in
+`vm_array_lib.cpp`) first checks that the array is all numbers or all strings
+(fewer than two elements are accepted whatever they are) and fails BEFORE moving
+anything, then sorts in place; the ordering is total (NaN after every other
+number) so it cannot fail afterwards. Before this the tree-walker used `<` for
+numbers, which is not a valid ordering when a NaN is present (undefined behavior
+in `std::sort`), checked types from inside the comparator, and rejected
+`sort([nil])` while the VM accepted it. Both engines now share these rules.
+
+**Testing it.** `tools/tim_sort_fuzz.cpp` is a stand-alone program (not part of
+the interpreter build; the build line is in its header). It compares the sort
+with `std::stable_sort` on fourteen shapes of data at sizes from 0 to 300,000
+(3,052 cases), checks the comparison counts (n - 1 for sorted, reversed and
+all-equal input), runs 4,000 cases with deliberately broken comparators and
+checks each result is a permutation, and runs 3,000 cases where the comparator
+throws part-way. Run it under AddressSanitizer and `_GLIBCXX_DEBUG` after any
+change to `tim_sort.h`.
 
 ## Design note: break and continue
 

@@ -1,0 +1,26 @@
+// Sorting data of different shapes: random, already sorted, reversed, many duplicates, and two sorted halves. Timsort is built to take advantage of order that is already there; the plain sort and a comparator sort are both measured.
+def shape(kind, n) {
+  var out = [];
+  for (var i = 0; i < n; i = i + 1) {
+    if (kind == 0) { push(out, (i * 7919) % 100003); }
+    if (kind == 1) { push(out, i); }
+    if (kind == 2) { push(out, n - i); }
+    if (kind == 3) { push(out, i % 50); }
+    if (kind == 4) { if (i < n / 2) { push(out, i * 2); } else { push(out, (i - n / 2) * 2 + 1); } }
+  }
+  return out;
+}
+var checksum = 0;
+for (var kind = 0; kind < 5; kind = kind + 1) {
+  var data = shape(kind, 200000);
+  sort(data);
+  checksum = checksum + data[0] + data[length(data) - 1] + data[length(data) / 2];
+}
+print checksum;
+var cmpSum = 0;
+for (var kind = 0; kind < 5; kind = kind + 1) {
+  var data = shape(kind, 20000);
+  sort(data, def(a, b) { return a - b; });
+  cmpSum = cmpSum + data[0] + data[length(data) - 1] + data[length(data) / 2];
+}
+print cmpSum;
