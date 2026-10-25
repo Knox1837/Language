@@ -13,7 +13,7 @@
 // statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
-// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node)
+// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
 // exprStmt    -> expression ";"
@@ -198,6 +198,12 @@ StmtPtr Parser::forStatement() {
     // "for (init; cond; incr) body" into: { init; while (cond) { body; incr; }}
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
 
+    // "for (var x in xs)"- told apart from the three-clause form by looking two tokens past "var". "for (x in xs)" (the "var" forgotten) is routed here too, so it gets one clear message instead of a cascade.
+    if ((check(TokenType::VAR) && checkAhead(1, TokenType::IDENTIFIER) && checkAhead(2, TokenType::IN)) ||
+        (check(TokenType::IDENTIFIER) && checkAhead(1, TokenType::IN))) {
+        return forInStatement();
+    }
+
     StmtPtr initializer;
     if (match({TokenType::SEMICOLON})) {
         initializer = nullptr;
@@ -232,8 +238,7 @@ StmtPtr Parser::forStatement() {
     // The increment is NOT appended to the body: `continue` skips the rest of the body, and the increment must still run. WhileStmt runs it after the body on every iteration (and not after a `break`).
     body = std::make_unique<WhileStmt>(std::move(condition), std::move(body), std::move(increment));
 
-    // Prepend the initializer, if present, in its own enclosing block so the
-    // loop variable's scope is limited to the loop itself.
+    // Prepend the initializer, if present, in its own enclosing block so the loop variable's scope is limited to the loop itself.
     if (initializer != nullptr) {
         std::vector<StmtPtr> outer;
         outer.push_back(std::move(initializer));
@@ -242,6 +247,23 @@ StmtPtr Parser::forStatement() {
     }
 
     return body;
+}
+
+StmtPtr Parser::forInStatement() {
+    if (!match({TokenType::VAR})) {
+        error(peek(), "Expect 'var' before the loop variable in a for-in loop."); // reported, not thrown, so the rest of the loop still parses
+    }
+    Token name = consume(TokenType::IDENTIFIER, "Expect loop variable name.");
+    consume(TokenType::IN, "Expect 'in' after the loop variable.");
+    ExprPtr iterable = expression();
+    Token paren = consume(TokenType::RIGHT_PAREN, "Expect ')' after for-in clause.");
+
+    StmtPtr body;
+    {
+        DepthGuard inLoop(loopDepth, loopDepth + 1);
+        body = statement();
+    }
+    return std::make_unique<ForInStmt>(std::move(name), std::move(paren), std::move(iterable), std::move(body));
 }
 
 StmtPtr Parser::returnStatement() {
@@ -508,8 +530,7 @@ ExprPtr Parser::primary() {
         return std::make_unique<ArrayLiteral>(std::move(elements));
     }
 
-    // Map literal: {"key": expr, "key2": expr2, ...}. Only reachable from within expression parsing (this is primary(), not statement())
-    // so it never conflicts with "{" starting a block: that decision is already made one level up, in statement().
+    // Map literal: {"key": expr, "key2": expr2, ...}. Only reachable from within expression parsing (this is primary(), not statement()) so it never conflicts with "{" starting a block: that decision is already made one level up, in statement().
     if (match({TokenType::LEFT_BRACE})) {
         std::vector<std::pair<std::string, ExprPtr>> entries;
         if (!check(TokenType::RIGHT_BRACE)) {
@@ -542,6 +563,11 @@ bool Parser::match(std::initializer_list<TokenType> types) {
 bool Parser::check(TokenType type) const {
     if (isAtEnd()) return false;
     return peek().type == type;
+}
+
+bool Parser::checkAhead(int offset, TokenType type) const {
+    size_t index = static_cast<size_t>(current) + static_cast<size_t>(offset);
+    return index < tokens.size() && tokens[index].type == type;
 }
 
 Token Parser::advance() {

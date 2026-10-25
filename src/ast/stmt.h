@@ -16,6 +16,7 @@ struct ClassStmt;
 struct ImportStmt;
 struct BreakStmt;
 struct ContinueStmt;
+struct ForInStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -30,6 +31,7 @@ struct StmtVisitor {
     virtual void visitImportStmt(ImportStmt& stmt) = 0;
     virtual void visitBreakStmt(BreakStmt& stmt) = 0;
     virtual void visitContinueStmt(ContinueStmt& stmt) = 0;
+    virtual void visitForInStmt(ForInStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -149,4 +151,16 @@ struct ContinueStmt : Stmt {
     Token keyword;
     explicit ContinueStmt(Token keyword) : keyword(std::move(keyword)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitContinueStmt(*this); }
+};
+
+// for (var name in iterable) body: runs `body` once per element of an array, or once per KEY of a map (keys come out in the map's own sorted order).
+// The iterable is evaluated once, before the loop. Each iteration gets a fresh scope holding its own copy of the loop variable, so a closure created in the body keeps that iteration's value. `break` and `continue` work as in any other loop.
+struct ForInStmt : Stmt {
+    Token name;      // the loop variable
+    Token paren;     // the ")" closing the clause, kept for line-number reporting (e.g. "Can only iterate over arrays and maps.")
+    ExprPtr iterable;
+    StmtPtr body;
+    ForInStmt(Token name, Token paren, ExprPtr iterable, StmtPtr body)
+        : name(std::move(name)), paren(std::move(paren)), iterable(std::move(iterable)), body(std::move(body)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitForInStmt(*this); }
 };

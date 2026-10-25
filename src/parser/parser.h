@@ -38,6 +38,7 @@ private:
     StmtPtr whileStatement();   // "while" "(" expression ")" statement
     StmtPtr forStatement();     // "for" "(" (varDecl|exprStmt|";") expression? ";" expression? ")" statement -- desugars to a whileStmt
     StmtPtr returnStatement();  // "return" expression? ";"
+    StmtPtr forInStatement();   // "var" IDENTIFIER "in" expression ")" statement -- the rest of "for (var x in xs) body" once the "(" is consumed
     StmtPtr breakStatement();   // "break" ";"     -- only inside a loop
     StmtPtr continueStatement(); // "continue" ";" -- only inside a loop
     StmtPtr expressionStatement(); // expression ";"
@@ -60,6 +61,7 @@ private:
     // token-stream helpers
     bool match(std::initializer_list<TokenType> types); // advance+true if current matches any
     bool check(TokenType type) const;   // is current token this type? (no advance)
+    bool checkAhead(int offset, TokenType type) const; // is the token `offset` places after the current one this type? (false past the end)
     Token advance();                    // consume and return current token
     bool isAtEnd() const;
     Token peek() const;

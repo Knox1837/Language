@@ -71,6 +71,7 @@ public:
     void visitImportStmt(ImportStmt& stmt) override;
     void visitBreakStmt(BreakStmt& stmt) override;
     void visitContinueStmt(ContinueStmt& stmt) override;
+    void visitForInStmt(ForInStmt& stmt) override;
 
 private:
     // `break` and `continue` do not throw: they set this flag, every enclosing block stops executing as soon as it sees the flag set, and the nearest enclosing loop reads it and resets it. (`return` uses an exception because it has to cross function calls; these never leave their function, so a flag is enough and costs nothing when unused.)

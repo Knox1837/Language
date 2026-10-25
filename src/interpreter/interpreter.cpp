@@ -317,6 +317,43 @@ void Interpreter::visitContinueStmt(ContinueStmt&) {
     loopSignal = LoopSignal::CONTINUE;
 }
 
+void Interpreter::visitForInStmt(ForInStmt& stmt) {
+    Value iterable = evaluate(*stmt.iterable); // evaluated once, before the loop
+
+    // An array is walked by position and its length is re-read every time round, so elements the body appends are visited and elements it removes are not (and the loop can never run off the end). A map is walked over a snapshot of its keys, because inserting into a map mid-walk would invalidate the iteration.
+    std::shared_ptr<ArrayObject> array;
+    if (auto* arrayValue = std::get_if<std::shared_ptr<ArrayObject>>(&iterable)) {
+        array = *arrayValue;
+    } else if (auto* mapValue = std::get_if<std::shared_ptr<MapObject>>(&iterable)) {
+        array = std::make_shared<ArrayObject>();
+        for (const auto& entry : (*mapValue)->entries) array->elements.push_back(Value{entry.first});
+    } else {
+        throw RuntimeError(stmt.paren, "Can only iterate over arrays and maps.");
+    }
+
+    for (size_t i = 0; i < array->elements.size(); i++) {
+        // A fresh scope per iteration, so a closure made in the body captures THIS iteration's variable (the VM gives every iteration its own stack slot the same way).
+        auto iterationEnv = std::make_shared<Environment>(environment);
+        iterationEnv->define(stmt.name.lexeme, array->elements[i]);
+
+        std::shared_ptr<Environment> previous = environment;
+        environment = std::move(iterationEnv);
+        try {
+            execute(*stmt.body);
+        } catch (...) {
+            environment = previous; // restore scope even if a runtime error/return propagates
+            throw;
+        }
+        environment = previous;
+
+        if (loopSignal == LoopSignal::BREAK) {
+            loopSignal = LoopSignal::NONE;
+            break;
+        }
+        loopSignal = LoopSignal::NONE; // CONTINUE (or nothing): on to the next element
+    }
+}
+
 void Interpreter::visitFunctionExpr(FunctionExpr& expr) {
     // Same as a named function, minus binding a name: the value is just the result of the expression.
     result = std::make_shared<UserFunction>(expr.declaration.get(), environment);

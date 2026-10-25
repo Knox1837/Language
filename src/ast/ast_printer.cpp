@@ -180,6 +180,13 @@ void ASTPrinter::visitBreakStmt(BreakStmt&) {
 void ASTPrinter::visitContinueStmt(ContinueStmt&) {
     result = "(continue)";
 }
+void ASTPrinter::visitForInStmt(ForInStmt& stmt) {
+    std::ostringstream out;
+    out << "(for-in " << stmt.name.lexeme << " " << print(*stmt.iterable);
+    stmt.body->accept(*this);
+    out << " " << result << ")";
+    result = out.str();
+}
 
 void ASTPrinter::visitFunctionStmt(FunctionStmt& stmt) {
     std::ostringstream out;
