@@ -435,8 +435,67 @@ void Compiler::whileStatement() {
     for (size_t breakJump : loop.breakJumps) patchJump(breakJump);
 }
 
+bool Compiler::checkAhead(int offset, TokenType type) const {
+    size_t index = current + static_cast<size_t>(offset);
+    return index < tokens.size() && tokens[index].type == type;
+}
+
+void Compiler::forInStatement() {
+    // "for (var x in xs) body". The "(" is already consumed.
+    // Two HIDDEN locals (their names contain a space, so no script can refer to them) live in the loop's own scope: the thing being walked and the position in it. Each trip round the loop, OP_ITER_NEXT pushes the next element, which becomes the loop variable `x` in a scope of its own (one level deeper), and the end of that scope pops it again. So every iteration has a fresh `x`, a closure captures just that iteration's value, and `break`/`continue` (which discard everything deeper than the loop's scope) leave only the two hidden locals behind.
+    //   <iterable> OP_ITER_PREP        slot 0: the array to walk
+    //   OP_CONSTANT 0                  slot 1: the position
+    //   loopStart: OP_ITER_NEXT -> done  push element = x
+    //   <body>
+    //   pop x, OP_LOOP loopStart
+    //   done: pop position, pop array
+    if (!match(TokenType::VAR)) {
+        errorAt(peek(), "Expect 'var' before the loop variable in a for-in loop.");
+    }
+    consume(TokenType::IDENTIFIER, "Expect loop variable name.");
+    Token name = previous();
+    consume(TokenType::IN, "Expect 'in' after the loop variable.");
+
+    beginScope(); // holds the two hidden locals
+    int loopScopeDepth = current_().scopeDepth;
+
+    expression();
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after for-in clause.");
+    emitByte(OpCode::OP_ITER_PREP); // a runtime error here reports the line of the ")", like the tree-walker
+    current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " iterable", previous().line), loopScopeDepth});
+    emitConstant(VMValue{0.0});
+    current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " position", previous().line), loopScopeDepth});
+
+    size_t loopStart = currentChunk().code.size();
+    size_t exitJump = emitJump(OpCode::OP_ITER_NEXT);
+
+    beginScope(); // one scope per iteration, holding just `x`
+    current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the element OP_ITER_NEXT just pushed already sits in its slot
+
+    current_().loops.push_back(LoopInfo{loopScopeDepth, loopStart, {}});
+    statement();
+    LoopInfo loop = std::move(current_().loops.back()); // by value: compiling the body may have grown functionStack
+    current_().loops.pop_back();
+
+    endScope(); // pops `x` (closing its upvalue first if a closure captured it)
+    emitLoop(loopStart);
+
+    patchJump(exitJump); // the iterable ran out `break` lands in the same place: it has already discarded `x` and the body's locals, so the stack is [.. array position] on both paths.
+    for (size_t breakJump : loop.breakJumps) patchJump(breakJump);
+
+    endScope(); // pops the position and the array
+}
+
 void Compiler::forStatement() {
-    // "for (init; cond; incr) body" — compiled directly to the equivalent jump/loop bytecode
+    if (check(TokenType::LEFT_PAREN) &&
+        ((checkAhead(1, TokenType::VAR) && checkAhead(2, TokenType::IDENTIFIER) && checkAhead(3, TokenType::IN)) ||
+         (checkAhead(1, TokenType::IDENTIFIER) && checkAhead(2, TokenType::IN)))) {
+        advance(); // the "("
+        forInStatement();
+        return;
+    }
+
+    // "for (init; cond; incr) body" - compiled directly to the equivalent jump/loop bytecode
     beginScope(); // so a "var i" in the init-clause is scoped to the loop, matching the tree-walker
 
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
@@ -594,8 +653,7 @@ void Compiler::unary(bool) {
 void Compiler::binary(bool) {
     TokenType opType = previous().type;
     const ParseRule& rule = getRule(opType);
-    // +1 so same-precedence operators are left-associative: 
-    // parsing the right operand stops at, rather than including, another operator of this same precedence (e.g. "1 - 2 - 3" groups as "(1-2)-3").
+    // +1 so same-precedence operators are left-associative: parsing the right operand stops at, rather than including, another operator of this same precedence (e.g. "1 - 2 - 3" groups as "(1-2)-3").
     parsePrecedence(static_cast<Precedence>(static_cast<int>(rule.precedence) + 1));
 
     switch (opType) {

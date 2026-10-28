@@ -19,7 +19,11 @@ declarations (`def`, no return-type annotations).
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
 class     this      super     import    as        break     continue
+in
 ```
+
+`in` is reserved (it is the keyword of the for-in loop), so it can no longer be
+used as a variable or function name.
 
 ## Data types
 
@@ -87,7 +91,7 @@ where `0` is falsey.)
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |
 | Compound assignment | `+= -= *= /= %=` | works on variables, fields (`obj.f += 1`), and indices (`arr[i] += 1`, `map["k"] += 1`); the target is evaluated exactly once even if it has side effects (see design note below) |
-| Indexing   | `arr[i]`, `arr[i] = x` | both are expressions; index-assignment returns the assigned value; also used for map access: `map["key"]` |
+| Indexing   | `arr[i]`, `arr[i] = x`, `s[i]` | both array forms are expressions; index-assignment returns the assigned value; also used for map access: `map["key"]`. `s[i]` reads one byte of a string as a 1-character string (same as `charAt(s, i)`); strings are immutable, so `s[i] = x` is a runtime error |
 
 **Design note — how compound assignment avoids double evaluation:** `obj.field += 1` and `arr[i] += 1` don't desugar into two separate Get/Set (or Index/IndexSet) nodes — doing so would evaluate `obj`/`arr` (and `i`) *twice*, which would be wrong if that expression has side effects (e.g. `getObject().field += 1` calling `getObject()` twice). Instead, dedicated `CompoundSet`/`CompoundIndexSet` AST nodes evaluate the target exactly once and reuse that single result for both the read and the write. Plain variables (`x += 1`) still desugar directly to `x = x + 1`, since re-reading a variable by name has no side effects to duplicate.
 
@@ -108,6 +112,7 @@ statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt   -> "while" "(" expression ")" statement
 forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
+             | "for" "(" "var" IDENTIFIER "in" expression ")" statement
 returnStmt  -> "return" expression? ";"
 breakStmt   -> "break" ";"
 continueStmt -> "continue" ";"
@@ -176,9 +181,51 @@ for (var i = 0; i < 5; i = i + 1) {
   print fns[0](); // 3, not 0 -- all three closures share the same `i`
   ```
 
+## For-in loops
+
+`for (var x in collection) body` runs the body once per element:
+
+```
+for (var n in [10, 20, 30]) {
+    print n;                        // 10 20 30
+}
+
+var ages = {"zed": 30, "amy": 25};
+for (var name in ages) {
+    print name + "=" + str(ages[name]);   // amy=25, then zed=30
+}
+```
+
+- The collection must be an **array** (the loop variable takes each element in
+  turn) or a **map** (it takes each *key*, in the map's sorted key order; look
+  the value up with `m[key]`). Anything else, a string included, is a runtime
+  error: `Can only iterate over arrays and maps.` To walk a string use a
+  three-clause `for` with `s[i]`.
+- The `var` is required: `for (x in xs)` is a syntax error (`Expect 'var' before
+  the loop variable in a for-in loop.`).
+- The collection expression is evaluated **once**, before the loop starts.
+- Every iteration gets its **own** loop variable, unlike the three-clause `for`
+  (see above): closures created in the body each keep that iteration's value.
+  ```
+  var fns = [];
+  for (var v in [10, 20, 30]) { push(fns, def() { return v; }); }
+  print fns[0]();   // 10, not 30
+  ```
+- The variable is a copy of the element. Assigning to it does not change the
+  array.
+- An array is walked by position, and its length is checked again on every
+  iteration. Elements the body appends are visited, elements it removes are not,
+  and the loop can never run past the end. A map is walked over a snapshot of its
+  keys, so adding or removing entries in the body does not disturb the loop (keys
+  added during the loop are not visited; a key removed during the loop is still
+  visited, and `m[key]` on it then fails as it would anywhere else).
+- `break`, `continue` and `return` work as in any other loop. The loop variable's
+  scope is the loop: it is not visible afterwards, and it may shadow an outer
+  variable of the same name.
+
 ## Break and continue
 
-`break;` leaves the innermost enclosing `while` or `for` loop immediately.
+`break;` leaves the innermost enclosing `while`, `for` or for-in loop immediately.
 `continue;` skips the rest of the current iteration of the innermost enclosing
 loop and starts the next one:
 
@@ -585,8 +632,8 @@ a parse error, or "Undefined variable" for the names that are not keywords.
 - **Non-string map keys** (map literals and `m[k]` accept strings only).
 - **Per-file-relative import path resolution** (currently all imports resolve
   against the top-level script's directory — see Imports section above).
-- **Operators and syntax:** no `?:` conditional, no `++`/`--`, no
-  `for x in collection` loop, no string indexing (`s[i]`; use `charAt`), and no
-  block comments (`/* ... */`; `//` line comments work).
+- **Operators and syntax:** no `?:` conditional, no `++`/`--`, and no block
+  comments (`/* ... */`; `//` line comments work). The for-in loop walks arrays
+  and maps only, not strings.
 - **Number formatting:** `print` shows whole numbers as integers and any other
   number with six decimal places (`3.14` prints as `3.140000`).

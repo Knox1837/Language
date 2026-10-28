@@ -59,8 +59,7 @@ private:
     FunctionState& current_() { return functionStack.back(); } // the function currently being compiled into
     Chunk& currentChunk() { return current_().function->chunk; }
 
-    // Precedence levels, lowest to highest. ASSIGNMENT sits below TERM
-    // so that e.g. parsing the right-hand side of "x = 1 + 2" correctly consumes the whole "1 + 2" rather than stopping after "1".
+    // Precedence levels, lowest to highest. ASSIGNMENT sits below TERM so that e.g. parsing the right-hand side of "x = 1 + 2" correctly consumes the whole "1 + 2" rather than stopping after "1".
     enum class Precedence {
         NONE,
         ASSIGNMENT, // =
@@ -107,6 +106,8 @@ private:
     void continueStatement(); // "continue" ";" -> discard the body's locals, jump to the next iteration
     void emitLoopLocalsCleanup(int loopScopeDepth); // emits the pops / upvalue-closes for every local deeper than loopScopeDepth WITHOUT forgetting them (code after the jump is still compiled in their scope)
     void forStatement();
+    void forInStatement(); // the rest of "for (var x in xs) body" once the "(" is consumed
+    bool checkAhead(int offset, TokenType type) const; // is the token `offset` places after the current one this type? (false past the end)
 
     // Variable-declaration helpers, split out so varDeclaration() can stay agnostic about whether it's declaring a global or a local the split happens here based on scopeDepth.
     void declareVariable(const Token& name);       // records a LOCAL in the current FunctionState (no-op at global scope)

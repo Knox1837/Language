@@ -592,6 +592,35 @@ InterpretResult VM::run(size_t baseFrames) {
                 push(VMValue{map});
                 break;
             }
+            case OpCode::OP_ITER_PREP: {
+                if (isVMArray(peekStack(0))) break; // an array is walked as it is
+                if (isVMMap(peekStack(0))) {
+                    // A map is walked over a snapshot of its keys: inserting into a map mid-walk would invalidate the iteration.
+                    auto keys = std::make_shared<VMArray>();
+                    const auto& entries = asVMMap(peekStack(0))->entries;
+                    keys->elements.reserve(entries.size());
+                    for (const auto& entry : entries) keys->elements.push_back(VMValue{entry.first});
+                    stack.back() = VMValue{keys};
+                    break;
+                }
+                runtimeError("Can only iterate over arrays and maps.");
+                return InterpretResult::RUNTIME_ERROR;
+            }
+            case OpCode::OP_ITER_NEXT: {
+                uint16_t offset = readShort();
+                // The stack is [.. array position]. Nothing below can reallocate the stack until the push at the end, so these references stay valid until then.
+                VMValue& position = stack[stack.size() - 1];
+                const auto& array = std::get<std::shared_ptr<VMArray>>(stack[stack.size() - 2]);
+                size_t i = static_cast<size_t>(std::get<double>(position));
+                if (i >= array->elements.size()) { // re-read every time: the body may have appended to or shortened the array
+                    currentFrame().ip += offset;
+                    break;
+                }
+                std::get<double>(position) = static_cast<double>(i + 1);
+                VMValue element = array->elements[i]; // copied before push(), which may reallocate the stack
+                push(std::move(element));
+                break;
+            }
             case OpCode::OP_DUP2: {
                 // Copy both first: push() may reallocate the stack, which would invalidate references into it.
                 VMValue below = peekStack(1);
@@ -773,8 +802,7 @@ InterpretResult VM::run(size_t baseFrames) {
                     return InterpretResult::OK;
                 }
 
-                // Discard everything the just-finished call left behind its callee value (at stackBase), all its arguments and locals (stackBase+1 and up) 
-                // then push the return value where the caller can use it as this whole call-expression's result.
+                // Discard everything the just-finished call left behind its callee value (at stackBase), all its arguments and locals (stackBase+1 and up) then push the return value where the caller can use it as this whole call-expression's result.
                 stack.resize(returningFromStackBase);
                 if (finishedImport) {
                     // An imported file finished its top-level code: the import expression's value is the module, and from now on it is cached.

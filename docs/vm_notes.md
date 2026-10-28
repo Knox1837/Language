@@ -522,8 +522,17 @@ numbers and strings inside it do).
 **Indexing.** `a[i]` is `OP_GET_INDEX`; `a[i] = v` is `OP_SET_INDEX`,
 which pushes the assigned value back so assignment stays an expression
 (`a[0] = a[1] = 9` works). Error messages are the tree-walker's:
-"Only arrays and maps can be indexed.", "Array index must be a
-number.", "Array index out of range.". An index
+"Only arrays, maps and strings can be indexed.", "Array index must be a
+number.", "Array index out of range.".
+A string can be indexed for reading: `s[i]` is a one-byte string, like
+`charAt` (so it indexes BYTES, not UTF-8 characters), with the same
+truncation rule and the errors "String index must be a number." and
+"String index out of range.". Writing to one, `s[i] = x` or `s[i] += x`, is the
+runtime error "Strings are immutable: can't assign to a string index."; for
+`+=` both engines still run the read, the right side and the operator first,
+and refuse only at the write. The tree-walker converts a string index with a
+check on the double before any cast, so NaN and huge values are out of range
+there too. An index
 is truncated toward zero, so `a[1.9]` is `a[1]` and `a[-0.5]` is
 `a[0]`; NaN, infinity and absurdly large values are simply out of range
 (the tree-walker casts them to `int`, which is undefined behavior).
@@ -896,6 +905,59 @@ raised). The out-of-loop error is reported but not thrown: throwing would make
 `synchronize()` skip the enclosing block's closing brace and add a second,
 misleading error. An empty block stands in for the statement, so a surrounding
 `if` or loop body is never null.
+
+## Design note: for-in loops
+
+`for (var x in xs) body` (see "For-in loops" in `language_spec.md`) has its own
+node in the tree-walker (`ForInStmt`) and two opcodes in the VM. The VM
+compiler has no AST, so `forStatement` looks ahead after the `(`: `var`,
+identifier, `in` means a for-in loop, and `forInStatement` takes over. (An
+identifier followed by `in` is routed there too, so a forgotten `var` gets one
+clear message instead of a cascade.)
+
+**Bytecode.**
+
+```
+<iterable>  OP_ITER_PREP          slot A: the array to walk (hidden local " iterable")
+OP_CONSTANT 0                     slot B: the position       (hidden local " position")
+loopStart:  OP_ITER_NEXT -> done  pushes the next element: it is the loop variable x
+            <body>
+            pop x (OP_CLOSE_UPVALUE if captured)
+            OP_LOOP loopStart
+done:       pop position, pop array
+```
+
+- `OP_ITER_PREP` leaves an array alone and replaces a map with a new array of
+  its keys (a snapshot, so inserting into the map in the body cannot invalidate
+  the walk; `std::map` order is the sorted order the tree-walker uses too).
+  Anything else is the runtime error `Can only iterate over arrays and maps.`,
+  reported with the line of the closing `)`, like the tree-walker.
+- `OP_ITER_NEXT` takes a forward jump offset like `OP_JUMP_IF_FALSE`. It reads
+  the array's length on every execution, so an array that grows or shrinks
+  under the loop is safe. The position is bumped in place in its stack slot.
+- The two hidden locals have names containing a space, so no script can name
+  them, and they are ordinary locals: the collector finds the array through the
+  stack, with no new root to register.
+- `x` lives in a scope of its own, one level deeper than the hidden locals,
+  entered and left on every iteration. That gives each iteration a fresh stack
+  slot (and a fresh upvalue if a closure captures it), which is what makes
+  closures keep their own value.
+- `LoopInfo.scopeDepth` is the depth of the hidden locals, so `break` and
+  `continue` (which discard everything deeper) pop `x` and the body's locals and
+  leave `[array position]` on the stack. `continue` jumps back to
+  `OP_ITER_NEXT`. `break` and the normal exit land on the same instruction, so
+  one `endScope()` after them pops the two hidden locals on both paths.
+
+**Tree-walker.** `visitForInStmt` evaluates the iterable once. An array is
+walked by index with `elements.size()` re-read each time; a map is copied into a
+temporary array of keys first. Each iteration builds a new `Environment` holding
+`x`, chained to the current scope, and runs the body in it with the same
+save/restore-on-exception pattern `executeBlock` uses, then reads `loopSignal`
+like `visitWhileStmt`.
+
+**`in` is now a keyword**, so `var in = 1;` is a syntax error in both engines.
+It is a real keyword rather than a word treated specially after `var x`, which
+keeps the lexer context-free.
 
 ## Design note: garbage collection
 
