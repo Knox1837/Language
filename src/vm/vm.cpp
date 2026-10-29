@@ -545,7 +545,21 @@ InterpretResult VM::run(size_t baseFrames) {
                     push(found->second);
                     break;
                 }
-                runtimeError("Only arrays and maps can be indexed.");
+                if (isVMString(object)) {
+                    if (!isVMNumber(index)) {
+                        runtimeError("String index must be a number.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    const std::string& text = asVMString(object);
+                    size_t i = 0;
+                    if (!toArrayIndex(asVMNumber(index), text.size(), i)) {
+                        runtimeError("String index out of range.");
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    push(VMValue{std::string(1, text[i])}); // one byte, like charAt
+                    break;
+                }
+                runtimeError("Only arrays, maps and strings can be indexed.");
                 return InterpretResult::RUNTIME_ERROR;
             }
             case OpCode::OP_SET_INDEX: {
@@ -576,6 +590,10 @@ InterpretResult VM::run(size_t baseFrames) {
                     asVMMap(object)->entries[asVMString(index)] = value;
                     push(value);
                     break;
+                }
+                if (isVMString(object)) {
+                    runtimeError("Strings are immutable: can't assign to a string index.");
+                    return InterpretResult::RUNTIME_ERROR;
                 }
                 runtimeError("Only arrays and maps can be indexed.");
                 return InterpretResult::RUNTIME_ERROR;

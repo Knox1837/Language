@@ -450,6 +450,15 @@ void Interpreter::visitMapLiteralExpr(MapLiteral& expr) {
     result = map;
 }
 
+namespace {
+// Converts a script number into a position in a string of `size` bytes, truncating toward zero (so -0.5 is position 0). False if it is not a valid position. Checked as a double BEFORE any integer cast, so NaN, infinity and huge values are simply out of range.
+bool toStringIndex(double d, size_t size, size_t& out) {
+    if (std::isnan(d) || d <= -1.0 || d >= static_cast<double>(size)) return false;
+    out = static_cast<size_t>(std::trunc(d));
+    return true;
+}
+} // namespace
+
 void Interpreter::visitIndexExpr(Index& expr) {
     Value objectValue = evaluate(*expr.object);
     Value indexValue = evaluate(*expr.indexExpr);
@@ -481,7 +490,20 @@ void Interpreter::visitIndexExpr(Index& expr) {
         return;
     }
 
-    throw RuntimeError(expr.bracket, "Only arrays and maps can be indexed.");
+    if (std::holds_alternative<std::string>(objectValue)) {
+        if (!std::holds_alternative<double>(indexValue)) {
+            throw RuntimeError(expr.bracket, "String index must be a number.");
+        }
+        const std::string& text = std::get<std::string>(objectValue);
+        size_t i = 0;
+        if (!toStringIndex(std::get<double>(indexValue), text.size(), i)) {
+            throw RuntimeError(expr.bracket, "String index out of range.");
+        }
+        result = std::string(1, text[i]); // one byte, like charAt
+        return;
+    }
+
+    throw RuntimeError(expr.bracket, "Only arrays, maps and strings can be indexed.");
 }
 
 void Interpreter::visitIndexSetExpr(IndexSet& expr) {
@@ -512,6 +534,10 @@ void Interpreter::visitIndexSetExpr(IndexSet& expr) {
         map->entries[std::get<std::string>(indexValue)] = newValue;
         result = newValue;
         return;
+    }
+
+    if (std::holds_alternative<std::string>(objectValue)) {
+        throw RuntimeError(expr.bracket, "Strings are immutable: can't assign to a string index.");
     }
 
     throw RuntimeError(expr.bracket, "Only arrays and maps can be indexed.");
@@ -553,6 +579,21 @@ void Interpreter::visitCompoundIndexSetExpr(CompoundIndexSet& expr) {
         map->entries[key] = newValue;
         result = newValue;
         return;
+    }
+
+    if (std::holds_alternative<std::string>(objectValue)) {
+        // The same order of events as in the VM: the read (with its index checks), then the right side, then the operator, and only then the refusal to write.
+        if (!std::holds_alternative<double>(indexValue)) {
+            throw RuntimeError(expr.bracket, "String index must be a number.");
+        }
+        const std::string& text = std::get<std::string>(objectValue);
+        size_t i = 0;
+        if (!toStringIndex(std::get<double>(indexValue), text.size(), i)) {
+            throw RuntimeError(expr.bracket, "String index out of range.");
+        }
+        Value rhs = evaluate(*expr.value);
+        applyArithmeticOp(expr.op.type, expr.op, Value{std::string(1, text[i])}, rhs);
+        throw RuntimeError(expr.bracket, "Strings are immutable: can't assign to a string index.");
     }
 
     throw RuntimeError(expr.bracket, "Only arrays and maps can be indexed.");
