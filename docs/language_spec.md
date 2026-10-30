@@ -91,9 +91,37 @@ where `0` is falsey.)
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |
 | Compound assignment | `+= -= *= /= %=` | works on variables, fields (`obj.f += 1`), and indices (`arr[i] += 1`, `map["k"] += 1`); the target is evaluated exactly once even if it has side effects (see design note below) |
+| Increment / decrement | `x++;` `x--;` | a **statement**, not an expression: sugar for `x += 1;` / `x -= 1;` on a variable, field or index (see below) |
+| Conditional | `cond ? a : b` | an expression; only the chosen branch is evaluated (see below) |
 | Indexing   | `arr[i]`, `arr[i] = x`, `s[i]` | both array forms are expressions; index-assignment returns the assigned value; also used for map access: `map["key"]`. `s[i]` reads one byte of a string as a 1-character string (same as `charAt(s, i)`); strings are immutable, so `s[i] = x` is a runtime error |
 
 **Design note — how compound assignment avoids double evaluation:** `obj.field += 1` and `arr[i] += 1` don't desugar into two separate Get/Set (or Index/IndexSet) nodes — doing so would evaluate `obj`/`arr` (and `i`) *twice*, which would be wrong if that expression has side effects (e.g. `getObject().field += 1` calling `getObject()` twice). Instead, dedicated `CompoundSet`/`CompoundIndexSet` AST nodes evaluate the target exactly once and reuse that single result for both the read and the write. Plain variables (`x += 1`) still desugar directly to `x = x + 1`, since re-reading a variable by name has no side effects to duplicate.
+
+**Conditional expression.** `cond ? a : b` evaluates `cond`; if it is truthy the
+result is `a`, otherwise `b`, and the branch not chosen never runs
+(`n != 0 ? 10 / n : 0` is safe). It binds looser than `or`/`and` and every
+arithmetic or comparison operator, and tighter than assignment, so
+`x = a or b ? c : d` means `x = ((a or b) ? c : d)`. It is right-associative:
+`a ? b : c ? d : e` is `a ? b : (c ? d : e)`, which gives the usual chain of
+tests. The middle part may be any expression, including an assignment
+(`ok ? x = 1 : 0`); a bare assignment in the last part needs parentheses.
+
+```
+var grade = score >= 90 ? "A" : score >= 80 ? "B" : "C";
+```
+
+**Increment and decrement are statements.** `x++;` is exactly `x += 1;` and
+`x--;` is exactly `x -= 1;`, for a variable, a field (`obj.count++;`) or an index
+(`arr[i]++;`, `m["hits"]++;`). The target is evaluated once, and the errors are
+`+= 1`'s (`s++` on a string is a runtime error). They are also allowed as the
+increment clause of a classic `for`: `for (var i = 0; i < n; i++) { ... }`.
+There is no prefix form (`++x`) and they cannot be used inside an expression:
+`print i++;`, `a[i++]` and `x = y++;` are syntax errors
+(`'++' and '--' can only be used as statements, not inside an expression.`).
+C's postfix form has two plausible meanings inside an expression (the old value
+or the new one), and silently picking the wrong one is worse than refusing.
+Because `--` is now one token, `x--1` no longer means `x - -1`; put a space
+(`x - -1`) if you want the subtraction.
 
 ## Grammar (EBNF-ish)
 
@@ -111,19 +139,22 @@ statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
              | breakStmt | continueStmt | block
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt   -> "while" "(" expression ")" statement
-forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement
+forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" incrementClause? ")" statement
              | "for" "(" "var" IDENTIFIER "in" expression ")" statement
+incrementClause -> expression | target ( "++" | "--" )
 returnStmt  -> "return" expression? ";"
 breakStmt   -> "break" ";"
 continueStmt -> "continue" ";"
 block       -> "{" declaration* "}"
 exprStmt    -> expression ";"
+             | target ( "++" | "--" ) ";"       (target: IDENTIFIER, call "." IDENTIFIER or call "[" expression "]")
 printStmt   -> "print" expression ";"
 
 expression  -> assignment
 assignment  -> ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) "=" assignment
              | ( call "." IDENTIFIER | call "[" expression "]" | IDENTIFIER ) ( "+=" | "-=" | "*=" | "/=" | "%=" ) assignment
-             | logicOr
+             | conditional
+conditional -> logicOr ( "?" expression ":" conditional )?
 logicOr     -> logicAnd ( "or" logicAnd )*
 logicAnd    -> equality ( "and" equality )*
 equality    -> comparison ( ( "!=" | "==" ) comparison )*
@@ -632,8 +663,8 @@ a parse error, or "Undefined variable" for the names that are not keywords.
 - **Non-string map keys** (map literals and `m[k]` accept strings only).
 - **Per-file-relative import path resolution** (currently all imports resolve
   against the top-level script's directory — see Imports section above).
-- **Operators and syntax:** no `?:` conditional, no `++`/`--`, and no block
-  comments (`/* ... */`; `//` line comments work). The for-in loop walks arrays
-  and maps only, not strings.
+- **Operators and syntax:** no block comments (`/* ... */`; `//` line comments
+  work), no prefix `++x` and no `x++` inside an expression (only as a statement).
+  The for-in loop walks arrays and maps only, not strings.
 - **Number formatting:** `print` shows whole numbers as integers and any other
   number with six decimal places (`3.14` prints as `3.140000`).

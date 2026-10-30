@@ -906,6 +906,59 @@ raised). The out-of-loop error is reported but not thrown: throwing would make
 misleading error. An empty block stands in for the statement, so a surrounding
 `if` or loop body is never null.
 
+## Design note: `?:` and `++` / `--`
+
+**Conditional.** `cond ? a : b` has its own node in the tree-walker
+(`Conditional`, evaluating only the chosen branch) and no new opcode in the VM.
+`?` is an infix rule at a new precedence level, `CONDITIONAL`, between
+`ASSIGNMENT` and `OR`. The code is the shape of an if/else whose branches each
+leave a value:
+
+```
+<cond>  OP_JUMP_IF_FALSE else   (the condition stays on the stack)
+        OP_POP
+        <then>                  expression(): assignment allowed
+        OP_JUMP end
+else:   OP_POP
+        <else>                  parsePrecedence(CONDITIONAL): right-associative
+end:
+```
+
+The tree-walker's rule is `conditional -> logicOr ( "?" expression ":" conditional )?`,
+called from `assignment` where `logicOr` used to be, so the two engines agree on
+precedence and associativity.
+
+**`++` / `--` are statements** (`x++;`, `a[i]--;`, `obj.n++;`, and the increment
+clause of a classic `for`), shorthand for `+= 1` / `-= 1`.
+
+- *Tree-walker.* `Parser::statementExpression` parses an expression and, if a
+  `++`/`--` follows, builds exactly the nodes `+= 1` builds (`Assign` over a
+  `Binary` for a variable, `CompoundSet`, `CompoundIndexSet`), so the target is
+  evaluated once and the errors are the same. Anything else in front of it is
+  `Invalid increment/decrement target.`
+- *VM.* The compiler is single-pass, and a target's accessor has already
+  emitted its read by the time it could see a following `++`. So the statement
+  first works out WHICH token may be the `++`/`--`: `findTrailingIncDec` scans
+  to the end of the statement (the `;`, or the `)` ending a `for` header) at
+  bracket depth 0 and records the index of a `++`/`--` right before it in
+  `incDecAt`. The accessors (`namedVariable`, `index`, `dot`) test
+  `canAssign && atIncDec()` next to their `+=` branch and emit the same
+  code with an implicit `1` (`OP_GET`, `OP_CONSTANT 1`, `OP_ADD`/`OP_SUBTRACT`,
+  `OP_SET`; `OP_DUP2` / `OP_DUP` for index and property targets).
+  `atIncDec()` also requires that the accessor runs at the same
+  `parsePrecedence` depth as the statement's outermost call, so that `x = y++`
+  (where `y` is parsed one level down, as the right side of the `=`) is not
+  mistaken for `y += 1`. A `++` that nothing consumed is
+  `Invalid increment/decrement target.`
+- *Why not expressions.* Inside an expression `x++` would have to yield the old
+  value, which needs the old value kept below the new one on the stack
+  (rotate opcodes) and a decision for every target kind. Making `a[i++]` an
+  error instead of silently giving the new value is the safer default, and
+  both engines say the same thing: `'++' and '--' can only be used as
+  statements, not inside an expression.`
+- *Lexer.* `++` and `--` are tokens now, so `x--1` lexes as `x -- 1`; it used to
+  mean `x - -1`.
+
 ## Design note: for-in loops
 
 `for (var x in xs) body` (see "For-in loops" in `language_spec.md`) has its own
