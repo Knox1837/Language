@@ -1,7 +1,5 @@
-// parser.cpp — implements the grammar below via recursive descent.
-// Each rule is one function; a function calls the functions for the rules
-// one level higher in precedence, so precedence is encoded directly in
-// the call structure (classic recursive-descent technique).
+// parser.cpp - implements the grammar below via recursive descent.
+// Each rule is one function; a function calls the functions for the rules one level higher in precedence, so precedence is encoded directly in the call structure (classic recursive-descent technique).
 //
 // program     -> declaration* EOF
 // declaration -> classDecl | funDecl | varDecl | statement
@@ -16,11 +14,11 @@
 // forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
-// exprStmt    -> expression ";"
+// exprStmt    -> expression ";" | target ( "++" | "--" ) ";"   (a statement only; sugar for target += 1 / target -= 1. The same form is allowed as the increment clause of a classic for)
 // printStmt   -> "print" expression ";"
-//
 // expression  -> assignment
-// assignment  -> ( call "." )? IDENTIFIER "=" assignment | logicOr
+// assignment  -> ( call "." )? IDENTIFIER "=" assignment | conditional
+// conditional -> logicOr ( "?" expression ":" conditional )?
 // logicOr     -> logicAnd ( "or" logicAnd )*
 // logicAnd    -> equality ( "and" equality )*
 // equality    -> comparison ( ( "!=" | "==" ) comparison )*
@@ -30,8 +28,7 @@
 // unary       -> ( "!" | "-" ) unary | call
 // call        -> primary ( "(" arguments? ")" | "." IDENTIFIER )*
 // arguments   -> expression ( "," expression )*
-// primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this"
-//              | "(" expression ")" | IDENTIFIER
+// primary     -> NUMBER | STRING | "true" | "false" | "nil" | "this" | "(" expression ")" | IDENTIFIER
 
 #include "parser.h"
 #include <iostream>
@@ -221,7 +218,7 @@ StmtPtr Parser::forStatement() {
 
     ExprPtr increment = nullptr;
     if (!check(TokenType::RIGHT_PAREN)) {
-        increment = expression();
+        increment = statementExpression();
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
 
@@ -298,7 +295,7 @@ StmtPtr Parser::continueStatement() {
 }
 
 StmtPtr Parser::expressionStatement() {
-    ExprPtr expr = expression();
+    ExprPtr expr = statementExpression();
     consume(TokenType::SEMICOLON, "Expect ';' after expression.");
     return std::make_unique<ExpressionStmt>(std::move(expr));
 }
@@ -314,10 +311,59 @@ std::vector<StmtPtr> Parser::block() {
 
 // expressions
 
-ExprPtr Parser::expression() { return assignment(); }
+ExprPtr Parser::expression() {
+    ExprPtr expr = assignment();
+    if (check(TokenType::PLUS_PLUS) || check(TokenType::MINUS_MINUS)) {
+        error(peek(), "'++' and '--' can only be used as statements, not inside an expression.");
+        advance(); // reported, not thrown: the rest of the statement still parses
+    }
+    return expr;
+}
+
+// `target++;` and `target--;` are STATEMENTS (as in Go), sugar for `target += 1;` and `target -= 1;`: they build exactly the nodes `+= 1` builds, so the target is evaluated once and the errors are the same. They are not expressions because C's `a[i++]` has two plausible meanings (the old value or the new one) and silently picking the wrong one is worse than refusing.
+ExprPtr Parser::statementExpression() {
+    ExprPtr expr = assignment();
+    if (!match({TokenType::PLUS_PLUS, TokenType::MINUS_MINUS})) return expr;
+
+    Token opToken = previous();
+    bool increment = opToken.type == TokenType::PLUS_PLUS;
+    Token baseOp(increment ? TokenType::PLUS : TokenType::MINUS, increment ? "+" : "-", opToken.line);
+    auto one = [] { return std::make_unique<Literal>(LiteralValue{1.0}); };
+
+    if (auto* varExpr = dynamic_cast<Variable*>(expr.get())) {
+        Token name = varExpr->name;
+        auto binary = std::make_unique<Binary>(std::make_unique<Variable>(name), std::move(baseOp), one());
+        return std::make_unique<Assign>(std::move(name), std::move(binary));
+    }
+    if (auto* getExpr = dynamic_cast<Get*>(expr.get())) {
+        return std::make_unique<CompoundSet>(std::move(getExpr->object), getExpr->name, std::move(baseOp), one());
+    }
+    if (auto* indexExpr = dynamic_cast<Index*>(expr.get())) {
+        return std::make_unique<CompoundIndexSet>(std::move(indexExpr->object), indexExpr->bracket,
+                                                    std::move(indexExpr->indexExpr), std::move(baseOp), one());
+    }
+
+    // `x = y++` parses as the assignment `x = y` followed by "++"; say what is actually wrong with it, as the VM does.
+    bool wasAssignment = dynamic_cast<Assign*>(expr.get()) || dynamic_cast<Set*>(expr.get()) || dynamic_cast<IndexSet*>(expr.get()) ||
+                         dynamic_cast<CompoundSet*>(expr.get()) || dynamic_cast<CompoundIndexSet*>(expr.get());
+    error(opToken, wasAssignment ? "'++' and '--' can only be used as statements, not inside an expression."
+                                 : "Invalid increment/decrement target.");
+    return expr;
+}
+
+ExprPtr Parser::conditional() {
+    ExprPtr expr = logicOr();
+    if (match({TokenType::QUESTION})) {
+        ExprPtr thenBranch = expression(); // any expression, assignment included, like C
+        consume(TokenType::COLON, "Expect ':' after the '?' branch of a conditional expression.");
+        ExprPtr elseBranch = conditional(); // right-associative: a ? b : c ? d : e is a ? b : (c ? d : e)
+        return std::make_unique<Conditional>(std::move(expr), std::move(thenBranch), std::move(elseBranch));
+    }
+    return expr;
+}
 
 ExprPtr Parser::assignment() {
-    ExprPtr expr = logicOr();
+    ExprPtr expr = conditional();
 
     if (match({TokenType::EQUAL})) {
         Token equals = previous();
@@ -355,8 +401,7 @@ ExprPtr Parser::assignment() {
             Token baseOp(baseType, opToken.lexeme.substr(0, opToken.lexeme.size() - 1), opToken.line);
 
             if (auto* varExpr = dynamic_cast<Variable*>(expr.get())) {
-                // Plain variable: safe to desugar, since re-reading a
-                // variable by name has no side effects to duplicate.
+                // Plain variable: safe to desugar, since re-reading a variable by name has no side effects to duplicate.
                 Token name = varExpr->name;
                 auto binary = std::make_unique<Binary>(std::make_unique<Variable>(name), std::move(baseOp), std::move(value));
                 return std::make_unique<Assign>(std::move(name), std::move(binary));

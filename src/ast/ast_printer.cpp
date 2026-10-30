@@ -52,6 +52,10 @@ void ASTPrinter::visitLogicalExpr(Logical& expr) {
     result = parenthesize(expr.op.lexeme, *expr.left, *expr.right);
 }
 
+void ASTPrinter::visitConditionalExpr(Conditional& expr) {
+    result = parenthesize("?:", *expr.condition, *expr.thenBranch, *expr.elseBranch);
+}
+
 void ASTPrinter::visitCallExpr(Call& expr) {
     std::ostringstream out;
     out << "(call " << print(*expr.callee);

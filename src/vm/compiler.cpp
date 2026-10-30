@@ -441,7 +441,7 @@ bool Compiler::checkAhead(int offset, TokenType type) const {
 }
 
 void Compiler::forInStatement() {
-    // "for (var x in xs) body". The "(" is already consumed.
+    // "for (var x in xs) body". The "(" is already consumed. 
     // Two HIDDEN locals (their names contain a space, so no script can refer to them) live in the loop's own scope: the thing being walked and the position in it. Each trip round the loop, OP_ITER_NEXT pushes the next element, which becomes the loop variable `x` in a scope of its own (one level deeper), and the end of that scope pops it again. So every iteration has a fresh `x`, a closure captures just that iteration's value, and `break`/`continue` (which discard everything deeper than the loop's scope) leave only the two hidden locals behind.
     //   <iterable> OP_ITER_PREP        slot 0: the array to walk
     //   OP_CONSTANT 0                  slot 1: the position
@@ -495,7 +495,7 @@ void Compiler::forStatement() {
         return;
     }
 
-    // "for (init; cond; incr) body" - compiled directly to the equivalent jump/loop bytecode
+    // "for (init; cond; incr) body" — compiled directly to the equivalent jump/loop bytecode
     beginScope(); // so a "var i" in the init-clause is scoped to the loop, matching the tree-walker
 
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
@@ -527,7 +527,7 @@ void Compiler::forStatement() {
         size_t bodyJump = emitJump(OpCode::OP_JUMP);
         size_t incrementStart = currentChunk().code.size();
 
-        expression(); // the increment expression, e.g. "i = i + 1"
+        statementExpression(TokenType::RIGHT_PAREN); // the increment expression, e.g. "i = i + 1" or "i++"
         emitByte(OpCode::OP_POP); // it's a bare expression — discard its unused result
 
         consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
@@ -560,7 +560,7 @@ void Compiler::forStatement() {
 }
 
 void Compiler::expressionStatement() {
-    expression();
+    statementExpression(TokenType::SEMICOLON);
     consume(TokenType::SEMICOLON, "Expect ';' after expression.");
     // Discard the expression's unused result, matching the tree-walker's ExpressionStmt (evaluate and discard) 
     emitByte(OpCode::OP_POP);
@@ -583,9 +583,69 @@ static bool compoundAssignOp(TokenType type, OpCode& op) {
 
 void Compiler::expression() {
     parsePrecedence(Precedence::ASSIGNMENT);
+    if (check(TokenType::PLUS_PLUS) || check(TokenType::MINUS_MINUS)) {
+        advance(); // reported, not fatal: compiling carries on, the program just won't run
+        errorAt(previous(), "'++' and '--' can only be used as statements, not inside an expression.");
+    }
+}
+
+// `target++;` and `target--;` are statements (see the tree-walker's Parser::statementExpression for why). The single-pass compiler has no AST to look back at, so it works out in advance WHICH token may be the ++/--: the one right before the end of the statement at bracket depth 0. A target's accessor then treats exactly that token like `+=` with an implicit 1. Any other ++/-- (inside brackets, after a non-target like `f()`, in the middle of an expression) is left alone and ends up as an error.
+size_t Compiler::findTrailingIncDec(TokenType terminator) const {
+    int depth = 0;
+    for (size_t i = current; i < tokens.size(); i++) {
+        TokenType t = tokens[i].type;
+        if (t == TokenType::END_OF_FILE) return NO_INCDEC;
+        bool ends = false;
+        if (t == TokenType::LEFT_PAREN || t == TokenType::LEFT_BRACKET || t == TokenType::LEFT_BRACE) {
+            depth++;
+        } else if (t == TokenType::RIGHT_PAREN || t == TokenType::RIGHT_BRACKET || t == TokenType::RIGHT_BRACE) {
+            if (depth == 0) {
+                if (t != terminator) return NO_INCDEC; // the enclosing construct closed first: not our statement's end
+                ends = true;
+            } else {
+                depth--;
+            }
+        } else if (t == terminator && depth == 0) {
+            ends = true;
+        }
+        if (ends) {
+            if (i > current && (tokens[i - 1].type == TokenType::PLUS_PLUS || tokens[i - 1].type == TokenType::MINUS_MINUS)) return i - 1;
+            return NO_INCDEC;
+        }
+    }
+    return NO_INCDEC;
+}
+
+void Compiler::statementExpression(TokenType terminator) {
+    size_t savedAt = incDecAt;
+    int savedDepth = incDecDepth;
+    incDecAt = findTrailingIncDec(terminator);
+    incDecDepth = parseDepth + 1; // the depth the parsePrecedence() below will run at
+    parsePrecedence(Precedence::ASSIGNMENT); // not expression(): this is where a trailing ++/-- is allowed
+    if (incDecAt != NO_INCDEC && current == incDecAt) {
+        // Nobody consumed it, so what came before it is not a variable, property or index (or it is nested inside something, as in `x = y++`).
+        advance();
+        errorAt(previous(), "Invalid increment/decrement target.");
+    }
+    incDecAt = savedAt;
+    incDecDepth = savedDepth;
+}
+
+void Compiler::conditional(bool) {
+    // The condition is already on the stack and the "?" is consumed. Same shape as an if/else, except that each branch leaves its value on the stack.
+    size_t elseJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
+    emitByte(OpCode::OP_POP);          // the condition was truthy: discard it
+    expression();                      // the "?" branch: any expression, assignment included
+    consume(TokenType::COLON, "Expect ':' after the '?' branch of a conditional expression.");
+    size_t endJump = emitJump(OpCode::OP_JUMP);
+    patchJump(elseJump);
+    emitByte(OpCode::OP_POP);          // the condition was falsey: discard it
+    parsePrecedence(Precedence::CONDITIONAL); // the ":" branch; at this level so that a ? b : c ? d : e is right-associative
+    patchJump(endJump);
 }
 
 void Compiler::parsePrecedence(Precedence precedence) {
+    struct DepthGuard { int& depth; explicit DepthGuard(int& d) : depth(d) { depth++; } ~DepthGuard() { depth--; } } depthGuard(parseDepth);
     advance();
     ParseFn prefixRule = getRule(previous().type).prefix;
     if (!prefixRule) {
@@ -682,7 +742,6 @@ void Compiler::and_(bool) {
 
 void Compiler::or_(bool) {
     // Mirror of and_(): if the left operand is truthy, skip the right operand and keep the left value as the result.
-    // adding a new opcode purely for this.
     size_t elseJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
     size_t endJump = emitJump(OpCode::OP_JUMP);
     patchJump(elseJump);
@@ -737,6 +796,14 @@ void Compiler::namedVariable(const Token& name, bool canAssign) {
         emitOp(getOp);
         expression();
         emitByte(compoundOp);
+        emitOp(setOp);
+    } else if (canAssign && atIncDec()) {
+        // "x++" / "x--" as a statement: "x += 1" / "x -= 1".
+        OpCode incDecOp = peek().type == TokenType::PLUS_PLUS ? OpCode::OP_ADD : OpCode::OP_SUBTRACT;
+        advance();
+        emitOp(getOp);
+        emitConstant(VMValue{1.0});
+        emitByte(incDecOp);
         emitOp(setOp);
     } else {
         emitOp(getOp);
@@ -845,6 +912,15 @@ void Compiler::index(bool canAssign) {
         expression();                    //               -> [a i current v]
         emitByte(compoundOp);            //               -> [a i result]
         emitByte(OpCode::OP_SET_INDEX); //               -> [result]
+    } else if (canAssign && atIncDec()) {
+        // "a[i]++" / "a[i]--" as a statement: "a[i] += 1" / "a[i] -= 1", the pair evaluated once.
+        OpCode incDecOp = peek().type == TokenType::PLUS_PLUS ? OpCode::OP_ADD : OpCode::OP_SUBTRACT;
+        advance();
+        emitByte(OpCode::OP_DUP2);       // [a i]         -> [a i a i]
+        emitByte(OpCode::OP_GET_INDEX);  //               -> [a i current]
+        emitConstant(VMValue{1.0});      //               -> [a i current 1]
+        emitByte(incDecOp);              //               -> [a i result]
+        emitByte(OpCode::OP_SET_INDEX);  //               -> [result]
     } else {
         emitByte(OpCode::OP_GET_INDEX);
     }
@@ -868,6 +944,16 @@ void Compiler::dot(bool canAssign) {
         emitConstantOp(OpCode::OP_GET_PROPERTY, nameConstant); // [obj obj]  -> [obj current]
         expression();                      //            -> [obj current v]
         emitByte(compoundOp);              //            -> [obj result]
+        emitConstantOp(OpCode::OP_SET_PROPERTY, nameConstant); //            -> [result]
+    } else if (canAssign && atIncDec()) {
+        // "obj.x++" / "obj.x--" as a statement: "obj.x += 1" / "obj.x -= 1", the object evaluated once.
+        OpCode incDecOp = peek().type == TokenType::PLUS_PLUS ? OpCode::OP_ADD : OpCode::OP_SUBTRACT;
+        advance();
+        emitByte(OpCode::OP_CHECK_FIELDS);
+        emitByte(OpCode::OP_DUP);          // [obj]      -> [obj obj]
+        emitConstantOp(OpCode::OP_GET_PROPERTY, nameConstant); // [obj obj]  -> [obj current]
+        emitConstant(VMValue{1.0});        //            -> [obj current 1]
+        emitByte(incDecOp);                //            -> [obj result]
         emitConstantOp(OpCode::OP_SET_PROPERTY, nameConstant); //            -> [result]
     } else {
         emitConstantOp(OpCode::OP_GET_PROPERTY, nameConstant);
@@ -914,6 +1000,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
     static const ParseRule thisRule       = { &Compiler::thisExpr,     nullptr,           Precedence::NONE };
     static const ParseRule functionRule   = { &Compiler::functionExpression, nullptr,     Precedence::NONE }; // prefix only: `def(...) { ... }` as an expression
     static const ParseRule superRule      = { &Compiler::superExpr,    nullptr,           Precedence::NONE };
+    static const ParseRule questionRule   = { nullptr,                 &Compiler::conditional, Precedence::CONDITIONAL };
     static const ParseRule noRule         = { nullptr,                 nullptr,           Precedence::NONE };
 
     switch (type) {
@@ -944,6 +1031,7 @@ const Compiler::ParseRule& Compiler::getRule(TokenType type) {
         case TokenType::LESS_EQUAL:     return comparisonRule;
         case TokenType::AND:            return andRule;
         case TokenType::OR:             return orRule;
+        case TokenType::QUESTION:       return questionRule;
         default:                        return noRule;
     }
 }

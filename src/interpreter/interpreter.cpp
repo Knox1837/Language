@@ -194,6 +194,15 @@ void Interpreter::visitLogicalExpr(Logical& expr) {
     result = evaluate(*expr.right);
 }
 
+void Interpreter::visitConditionalExpr(Conditional& expr) {
+    // Only the chosen branch runs, so `n != 0 ? 10 / n : 0` never divides by zero.
+    if (isTruthy(evaluate(*expr.condition))) {
+        result = evaluate(*expr.thenBranch);
+    } else {
+        result = evaluate(*expr.elseBranch);
+    }
+}
+
 void Interpreter::visitCallExpr(Call& expr) {
     Value callee = evaluate(*expr.callee);
 

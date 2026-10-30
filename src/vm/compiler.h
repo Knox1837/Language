@@ -63,6 +63,7 @@ private:
     enum class Precedence {
         NONE,
         ASSIGNMENT, // =
+        CONDITIONAL, // ?:  (right-associative)
         OR,         // or
         AND,        // and
         EQUALITY,   // == !=
@@ -85,6 +86,13 @@ private:
 
     void parsePrecedence(Precedence precedence);
     void expression();
+    void statementExpression(TokenType terminator); // like expression(), but the one place a trailing "++" / "--" is allowed; `terminator` (";" or ")") is the token that ends the statement or the for-increment clause
+    size_t findTrailingIncDec(TokenType terminator) const; // index of a "++" / "--" token that sits right before the terminator at nesting depth 0, or NO_INCDEC
+    static constexpr size_t NO_INCDEC = static_cast<size_t>(-1);
+    size_t incDecAt = NO_INCDEC; // the token index of the one "++" / "--" the statement being compiled may use; the target's accessor (variable, ".", "[") consumes it exactly like `+=`
+    int parseDepth = 0;          // how many parsePrecedence() calls are active right now
+    int incDecDepth = -1;        // the parseDepth of the statement's OUTERMOST parsePrecedence(): only an accessor running at exactly this depth is the whole statement's target. `x = y++` and `-x++` reach `y` / `x` one level deeper, so they are refused.
+    bool atIncDec() const { return current == incDecAt && parseDepth == incDecDepth; }
     void declaration();
     void varDeclaration();
     void functionDeclaration();
@@ -118,9 +126,7 @@ private:
     // Recursively walks OUTWARD through enclosing functions to see if any of them have a local with the given name, returning its upvalue index if so, or -1 if not.
     int resolveUpvalue(int functionIndex, const Token& name);
 
-    // Registers (or reuses, if already registered) an upvalue capture
-    // for the function at `functionIndex`, returning its index in that
-    // function's own upvalues list.
+    // Registers (or reuses, if already registered) an upvalue capture for the function at `functionIndex`, returning its index in that function's own upvalues list.
     int addUpvalue(int functionIndex, uint8_t index, bool isLocal);
 
     // Prefix/infix parse rules — each assumes the relevant token was just consumed (`previous()`), and emits bytecode for it.
@@ -136,6 +142,7 @@ private:
     void superExpr(bool canAssign);  // the prefix `super`, which must be followed by ".method"
     void functionExpression(bool canAssign); // the prefix `def`: an anonymous function, def(params) { body }
     void and_(bool canAssign);
+    void conditional(bool canAssign); // infix "?": condition ? thenExpr : elseExpr
     void or_(bool canAssign);
     void call(bool canAssign);       // the infix "(" that turns a primary expression into a function call
     void arrayLiteral(bool canAssign); // the prefix "[":  [a, b, c]

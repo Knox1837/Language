@@ -45,6 +45,7 @@ public:
     void visitVariableExpr(Variable& expr) override;
     void visitAssignExpr(Assign& expr) override;
     void visitLogicalExpr(Logical& expr) override;
+    void visitConditionalExpr(Conditional& expr) override;
     void visitCallExpr(Call& expr) override;
     void visitGetExpr(Get& expr) override;
     void visitSetExpr(Set& expr) override;

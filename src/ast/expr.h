@@ -13,6 +13,7 @@ struct Unary;
 struct Variable;
 struct Assign;
 struct Logical;
+struct Conditional;
 struct Call;
 struct Get;
 struct Set;
@@ -38,6 +39,7 @@ struct ExprVisitor {
     virtual void visitVariableExpr(Variable& expr) = 0;
     virtual void visitAssignExpr(Assign& expr) = 0;
     virtual void visitLogicalExpr(Logical& expr) = 0;
+    virtual void visitConditionalExpr(Conditional& expr) = 0;
     virtual void visitCallExpr(Call& expr) = 0;
     virtual void visitGetExpr(Get& expr) = 0;
     virtual void visitSetExpr(Set& expr) = 0;
@@ -118,6 +120,16 @@ struct Logical : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitLogicalExpr(*this); }
 };
 
+// condition ? thenBranch : elseBranch   e.g.  n > 0 ? "positive" : "not positive". Only the branch that is chosen is evaluated.
+struct Conditional : Expr {
+    ExprPtr condition;
+    ExprPtr thenBranch;
+    ExprPtr elseBranch;
+    Conditional(ExprPtr condition, ExprPtr thenBranch, ExprPtr elseBranch)
+        : condition(std::move(condition)), thenBranch(std::move(thenBranch)), elseBranch(std::move(elseBranch)) {}
+    void accept(ExprVisitor& visitor) override { visitor.visitConditionalExpr(*this); }
+};
+
 // callee(arg1, arg2, ...)   e.g.  abc(1, 2)
 // `paren` is the closing ')' token, kept only so runtime errors (like "wrong number of arguments") can report a line number.
 struct Call : Expr {
@@ -170,8 +182,7 @@ struct ArrayLiteral : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitArrayLiteralExpr(*this); }
 };
 
-// object[index]: reads an element out of an array
-// `bracket` is the '[' token, kept only for error line-numbers.
+// object[index]: reads an element out of an array `bracket` is the '[' token, kept only for error line-numbers.
 struct Index : Expr {
     ExprPtr object;
     Token bracket;
@@ -181,7 +192,7 @@ struct Index : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitIndexExpr(*this); }
 };
 
-// object[index] = value   - writes an element into an array
+// object[index] = value - writes an element into an array
 struct IndexSet : Expr {
     ExprPtr object;
     Token bracket;

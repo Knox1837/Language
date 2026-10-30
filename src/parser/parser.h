@@ -41,12 +41,14 @@ private:
     StmtPtr forInStatement();   // "var" IDENTIFIER "in" expression ")" statement -- the rest of "for (var x in xs) body" once the "(" is consumed
     StmtPtr breakStatement();   // "break" ";"     -- only inside a loop
     StmtPtr continueStatement(); // "continue" ";" -- only inside a loop
-    StmtPtr expressionStatement(); // expression ";"
+    StmtPtr expressionStatement(); // expression ";"  |  target "++" ";"  |  target "--" ";"
     std::vector<StmtPtr> block();  // "{" declaration* "}"
 
     // expression grammar rules, lowest to highest precedence
-    ExprPtr expression();  // -> assignment
-    ExprPtr assignment();  // -> IDENTIFIER "=" assignment | logicOr
+    ExprPtr expression();  // -> assignment   (a trailing ++ / -- here is an error: they are statements)
+    ExprPtr statementExpression(); // -> assignment | target ("++" | "--"); the form an expression statement and the increment clause of a for may take
+    ExprPtr assignment();  // -> IDENTIFIER "=" assignment | conditional
+    ExprPtr conditional(); // -> logicOr ( "?" expression ":" conditional )?
     ExprPtr logicOr();     // -> logicAnd ( "or" logicAnd )*
     ExprPtr logicAnd();    // -> equality ( "and" equality )*
     ExprPtr equality();    // -> comparison ( ("!=" | "==") comparison )*
