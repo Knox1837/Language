@@ -9,13 +9,13 @@ enum class OpCode : uint8_t {
     OP_SUBTRACT,       // pop b, pop a, push (a - b)
     OP_MULTIPLY,       // pop b, pop a, push (a * b)
     OP_DIVIDE,         // pop b, pop a, push (a / b)
-    OP_MODULO,         // pop b, pop a, push fmod(a, b) -- sign follows the dividend, like the tree-walker; b == 0 is an error
+    OP_MODULO,         // pop b, pop a, push fmod(a, b) - sign follows the dividend, like the tree-walker; b == 0 is an error
     OP_NEGATE,         // pop a, push (-a)
     OP_PRINT,          // pop a, print it
     OP_POP,            // pop and discard (used to clean up an expression-statement's unused result)
     OP_DEFINE_GLOBAL,  // pop value, bind it to the name at chunk.constants[operand] in the globals table
     OP_GET_GLOBAL,     // look up the name at chunk.constants[operand] in globals, push its value
-    OP_SET_GLOBAL,     // peek (don't pop) the top of stack, store it into the EXISTING global named at chunk.constants[operand] — errors if that global was never defined
+    OP_SET_GLOBAL,     // peek (don't pop) the top of stack, store it into the EXISTING global named at chunk.constants[operand] - errors if that global was never defined
     OP_GET_LOCAL,      // push a COPY of stack[operand] (a local variable's slot on the value stack itself)
     OP_SET_LOCAL,      // peek (don't pop) the top of stack, store it into stack[operand]
     OP_TRUE,           // push the boolean true
@@ -51,4 +51,6 @@ enum class OpCode : uint8_t {
     OP_IMPORT,         // operand: constant-pool index of the path string. Loads the file (or reuses the cached module) and leaves the module object on the stack. A first-time load pushes a call frame for the file's top-level code, and OP_RETURN from that frame supplies the module object instead of nil
     OP_ITER_PREP,      // pops-and-replaces the top value, the thing a for-in loop walks: an array stays as it is, a map becomes a new array of its keys (a snapshot, in the map's sorted key order); anything else is an error
     OP_ITER_NEXT,      // operand: a 2-byte forward jump offset. Stack [.. array index]. If index is past the end of the array, jumps ahead by the offset (the loop is over, nothing pushed); otherwise pushes array[index] and adds 1 to the index IN PLACE. The array's length is re-read each time, so it may change under the loop
+    OP_TRY,            // operand: a 2-byte forward offset to the catch block. Registers a handler remembering the frame count, the stack height and the catch address: an error raised while it is registered unwinds back to exactly that state, pushes the error value (it becomes the catch variable) and continues at the catch address
+    OP_POP_HANDLER,    // the try body ended without an error (or a break/continue is leaving it): unregister the innermost handler
 };

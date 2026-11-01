@@ -66,7 +66,9 @@ InterpretResult VM::interpret(const std::string& source) {
     frames.clear();
     openUpvalues.clear();
     currentlyLoading.clear(); // a runtime error inside an import on an earlier REPL line must not leave that file "still loading"
-    errorReported = false;
+    errorPending = false;
+    pendingValue = VMValue{};
+    handlers.clear();
 
     // natives find the VM through VM::active(); put the previous value back on every way out of interpret()
     struct ActiveScope {
@@ -141,21 +143,73 @@ bool VM::areVMEqual(const VMValue& a, const VMValue& b) {
     return a == b; // std::variant's operator== already returns false for differing alternatives rather than throwing, exactly the semantics the tree-walker's isEqual() wants
 }
 
-void VM::runtimeError(const std::string& message) {
-    int line = -1;
+int VM::currentLine() const {
     if (!frames.empty()) {
-        const auto& frame = currentFrame();
+        const auto& frame = frames.back();
         if (frame.ip > 0 && frame.ip - 1 < frame.closure->function->chunk.lines.size()) {
-            line = frame.closure->function->chunk.lines[frame.ip - 1];
+            return frame.closure->function->chunk.lines[frame.ip - 1];
         }
     }
-    std::cerr << "[line " << line << "] Runtime error: " << message << "\n";
-    errorReported = true;
+    return -1;
+}
 
-    // Unwind the whole call stack so a subsequent REPL line (if any) starts clean rather than resuming mid-call matches the tree-walker's interpret() catching RuntimeError at the top level and abandoning the rest of that script/line's execution.
+// Raises a runtime error: records it and returns. Nothing is printed and nothing is unwound here; every caller goes on to leave runLoop() with RUNTIME_ERROR, and run() then decides, with the whole picture, whether a `try` catches it or it is printed.
+void VM::runtimeError(const std::string& message) {
+    pendingValue = VMValue{message};
+    pendingLine = currentLine();
+    errorPending = true;
+}
+
+void VM::raiseError(const VMValue& value) {
+    pendingValue = value;
+    pendingLine = currentLine();
+    errorPending = true;
+}
+
+// Delivers the pending error to the innermost handler, if this run() may use it. A handler belongs to frame (frameCount - 1); a run() that began with `baseFrames` frames on the stack is responsible for frames from index baseFrames up, so it may use a handler only if frameCount > baseFrames. A handler below that line belongs to an outer run(), which is waiting inside a native that called us: return false and let the error travel out through that native.
+bool VM::unwindToHandler(size_t baseFrames) {
+    if (handlers.empty() || handlers.back().frameCount <= baseFrames) return false;
+    TryHandler handler = handlers.back();
+    handlers.pop_back();
+
+    closeUpvalues(handler.stackHeight); // locals of the abandoned code that closures captured must be closed BEFORE their slots go
+
+    while (frames.size() > handler.frameCount) {
+        // An import being abandoned is no longer "loading", or a later import of that file would be reported as circular.
+        if (frames.back().importedModule) currentlyLoading.erase(frames.back().importedModule->path);
+        frames.pop_back();
+    }
+    stack.resize(handler.stackHeight);
+
+    push(std::move(pendingValue)); // the caught value becomes the catch variable's slot
+    pendingValue = VMValue{};
+    errorPending = false;
+    currentFrame().ip = handler.catchIp;
+    return true;
+}
+
+void VM::reportUncaughtError() {
+    std::string text = isVMString(pendingValue) ? asVMString(pendingValue) : stringifyVMValue(pendingValue);
+    std::cerr << "[line " << pendingLine << "] Runtime error: " << text << "\n";
+
+    // Abandon the whole program, so a subsequent REPL line (if any) starts clean rather than resuming mid-call; the same as the tree-walker's interpret() catching the error at the top level.
+    pendingValue = VMValue{};
     frames.clear();
     stack.clear();
     openUpvalues.clear();
+    handlers.clear();
+    currentlyLoading.clear();
+}
+
+InterpretResult VM::run(size_t baseFrames) {
+    while (true) {
+        InterpretResult result = runLoop(baseFrames);
+        if (result != InterpretResult::RUNTIME_ERROR) return result;
+        if (!errorPending) runtimeError("Unknown error."); // defensive: a failure always raises first
+        if (unwindToHandler(baseFrames)) continue;          // caught: carry on in the catch block
+        if (baseFrames == 0) reportUncaughtError();         // nothing can catch it: print it and stop
+        return InterpretResult::RUNTIME_ERROR;              // nested: the native that called us returns false and the error travels outward
+    }
 }
 
 bool VM::callValue(const VMValue& callee, int argCount) {
@@ -174,7 +228,7 @@ bool VM::callValue(const VMValue& callee, int argCount) {
         std::string error;
         if (!native->fn(args, result, error)) {
             // A native that called a script function (map, sort, ...) and saw it fail returns false with no message of its own: the failure inside the callback was already reported, and reporting again would print a second, empty error.
-            if (!errorReported) runtimeError(error);
+            if (!errorPending) runtimeError(error);
             return false;
         }
         // Natives have no CallFrame: drop the arguments and the callee, then leave the result where the call expression's value belongs.
@@ -264,7 +318,7 @@ void VM::closeUpvalues(size_t fromIndex) {
     }
 }
 
-InterpretResult VM::run(size_t baseFrames) {
+InterpretResult VM::runLoop(size_t baseFrames) {
     wideOperand = false;
     while (true) {
 #ifdef MYLANG_GC_STRESS
@@ -610,6 +664,15 @@ InterpretResult VM::run(size_t baseFrames) {
                 push(VMValue{map});
                 break;
             }
+            case OpCode::OP_TRY: {
+                uint16_t offset = readShort();
+                handlers.push_back(TryHandler{frames.size(), stack.size(), currentFrame().ip + offset});
+                break;
+            }
+            case OpCode::OP_POP_HANDLER: {
+                handlers.pop_back();
+                break;
+            }
             case OpCode::OP_ITER_PREP: {
                 if (isVMArray(peekStack(0))) break; // an array is walked as it is
                 if (isVMMap(peekStack(0))) {
@@ -808,6 +871,8 @@ InterpretResult VM::run(size_t baseFrames) {
             case OpCode::OP_RETURN: {
                 VMValue result = pop();
                 size_t returningFromStackBase = currentFrame().stackBase;
+                // `return` from inside a try body leaves the handlers of this call registered: drop them.
+                while (!handlers.empty() && handlers.back().frameCount >= frames.size()) handlers.pop_back();
                 std::shared_ptr<VMModule> finishedImport = currentFrame().importedModule; // copy: the frame is popped below
 
                 // Close any of THIS call's locals that some closure captured (must happen BEFORE the stack is truncated below, or open upvalues would dangle)

@@ -36,6 +36,9 @@ public:
     // Only valid while a native is running, i.e. while run() is on the C++ stack.
     bool callFunction(const VMValue& callee, const std::vector<VMValue>& args, VMValue& result);
 
+    // Raises `value` as a runtime error from inside a native (error(value) is one): the native then returns false, and the error is delivered to the innermost `try`, or printed if there is none.
+    void raiseError(const VMValue& value);
+
     // The VM that is currently executing (set for the duration of interpret()). Natives are plain functions with no VM parameter, so they find the VM through this.
     static VM* active();
 
@@ -64,9 +67,24 @@ private:
 
     // Runs instructions until the call frame that was on top when run() was entered has returned: `baseFrames` is the number of frames at that moment, 0 for the whole program. A nested call from a native (callFunction) uses a larger value and gets its result left on the stack.
     InterpretResult run(size_t baseFrames = 0);
+    InterpretResult runLoop(size_t baseFrames); // the instruction loop; returns RUNTIME_ERROR with an error pending
 
-    // True once runtimeError() has printed an error, until the next interpret(). A native that called back into the VM and saw it fail must not have its (empty) error printed again.
-    bool errorReported = false;
+    // One active `try`: what to restore when an error is raised inside it.
+    struct TryHandler {
+        size_t frameCount;  // frames.size() when the try began: the handler belongs to frame frameCount - 1
+        size_t stackHeight; // stack.size() then: everything above it is discarded, and the error value is pushed in its place
+        size_t catchIp;     // where the catch block starts, in the frame that ran the try
+    };
+    std::vector<TryHandler> handlers; // innermost last. Entries die with their try body (OP_POP_HANDLER), with their frame (OP_RETURN) or when an error is caught
+
+    bool unwindToHandler(size_t baseFrames); // delivers the pending error to the innermost handler this run() may use; false if there is none
+    void reportUncaughtError();              // prints the pending error and abandons the program, as runtimeError() always used to
+
+    // True from the moment an error is raised until it is caught or reported. A native that called back into the VM and saw it fail returns false with no message of its own: the error is already pending, and raising a second one would replace it with an empty message.
+    bool errorPending = false;
+    VMValue pendingValue; // what was thrown: a message string for a language error, any value for error(value)
+    int pendingLine = -1; // the source line the error was raised on, for the message of an uncaught one
+    int currentLine() const;
 
     CallFrame& currentFrame() { return frames.back(); }
 
@@ -79,7 +97,7 @@ private:
     VMValue pop();
     const VMValue& peekStack(int distanceFromTop) const;
 
-    // Attempts to call `callee` with `argCount` arguments already sittingon top of the stack (with `callee` itself just below them). 
+    // Attempts to call `callee` with `argCount` arguments already sittingon top of the stack (with `callee` itself just below them).
     // pushes a new CallFrame on success; returns false (and reports a runtime error) if `callee` isn't callable or the argument count is wrong.
     bool callValue(const VMValue& callee, int argCount);
     bool call(std::shared_ptr<VMClosure> closure, int argCount);

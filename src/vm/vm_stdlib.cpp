@@ -1,5 +1,6 @@
 // vm_stdlib.cpp: native functions for the VM. Names, arities and error messages match the tree-walker's stdlib (src/stdlib/) so both engines behave the same.
 #include "vm_stdlib.h"
+#include "vm.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
 #include "vm_class.h"
@@ -471,6 +472,14 @@ static void registerGc(Globals& globals) {
     });
 }
 
+// error(value): raises `value` as a runtime error. The VM delivers it to the innermost `try`, or prints "[line N] Runtime error: " and the value's printed form.
+static void registerError(Globals& globals) {
+    define(globals, "error", 1, [](std::vector<VMValue>& args, VMValue&, std::string&) {
+        VM::active()->raiseError(args[0]);
+        return false; // the error is now pending; a native that fails with one returns false and sets no message of its own
+    });
+}
+
 void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerMath(globals);
     registerString(globals);
@@ -479,4 +488,5 @@ void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerVMArrayLib(globals); // push, pop, length, ... (the array functions live in their own file)
     registerVMMapLib(globals);   // keys, values, hasKey, remove
     registerGc(globals);         // gc, heapSize
+    registerError(globals);      // error
 }

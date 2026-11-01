@@ -344,6 +344,8 @@ void Compiler::statement() {
         breakStatement();
     } else if (match(TokenType::CONTINUE)) {
         continueStatement();
+    } else if (match(TokenType::TRY)) {
+        tryStatement();
     } else if (match(TokenType::LEFT_BRACE)) {
         beginScope();
         block();
@@ -421,7 +423,7 @@ void Compiler::whileStatement() {
     size_t exitJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
     emitByte(OpCode::OP_POP); // discard the (truthy) condition before running the body
 
-    current_().loops.push_back(LoopInfo{current_().scopeDepth, loopStart, {}});
+    current_().loops.push_back(LoopInfo{current_().scopeDepth, loopStart, {}, current_().tryDepth});
     statement();
     LoopInfo loop = std::move(current_().loops.back()); // by value: compiling the body may have grown functionStack, so no reference is held across it
     current_().loops.pop_back();
@@ -441,14 +443,8 @@ bool Compiler::checkAhead(int offset, TokenType type) const {
 }
 
 void Compiler::forInStatement() {
-    // "for (var x in xs) body". The "(" is already consumed. 
-    // Two HIDDEN locals (their names contain a space, so no script can refer to them) live in the loop's own scope: the thing being walked and the position in it. Each trip round the loop, OP_ITER_NEXT pushes the next element, which becomes the loop variable `x` in a scope of its own (one level deeper), and the end of that scope pops it again. So every iteration has a fresh `x`, a closure captures just that iteration's value, and `break`/`continue` (which discard everything deeper than the loop's scope) leave only the two hidden locals behind.
-    //   <iterable> OP_ITER_PREP        slot 0: the array to walk
-    //   OP_CONSTANT 0                  slot 1: the position
-    //   loopStart: OP_ITER_NEXT -> done  push element = x
-    //   <body>
-    //   pop x, OP_LOOP loopStart
-    //   done: pop position, pop array
+    // "for (var x in xs) body".
+    
     if (!match(TokenType::VAR)) {
         errorAt(peek(), "Expect 'var' before the loop variable in a for-in loop.");
     }
@@ -472,7 +468,7 @@ void Compiler::forInStatement() {
     beginScope(); // one scope per iteration, holding just `x`
     current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the element OP_ITER_NEXT just pushed already sits in its slot
 
-    current_().loops.push_back(LoopInfo{loopScopeDepth, loopStart, {}});
+    current_().loops.push_back(LoopInfo{loopScopeDepth, loopStart, {}, current_().tryDepth});
     statement();
     LoopInfo loop = std::move(current_().loops.back()); // by value: compiling the body may have grown functionStack
     current_().loops.pop_back();
@@ -541,7 +537,7 @@ void Compiler::forStatement() {
 
     // From here `loopStart` is where `continue` must go: the increment clause if there is one (it was just assigned above), otherwise the condition.
     // The loop's scope depth is the for-scope's own (it holds `var i`), so break/continue leave `i` alone and discard only what the body declared.
-    current_().loops.push_back(LoopInfo{current_().scopeDepth, loopStart, {}});
+    current_().loops.push_back(LoopInfo{current_().scopeDepth, loopStart, {}, current_().tryDepth});
     statement(); // the loop body
     LoopInfo loop = std::move(current_().loops.back());
     current_().loops.pop_back();
@@ -1117,6 +1113,43 @@ void Compiler::emitLoopLocalsCleanup(int loopScopeDepth) {
     }
 }
 
+void Compiler::emitHandlerPops(int downToTryDepth) {
+    for (int depth = current_().tryDepth; depth > downToTryDepth; depth--) emitByte(OpCode::OP_POP_HANDLER);
+}
+
+void Compiler::tryStatement() {
+    // try { body } catch (e) { handler }
+   consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
+    size_t tryJump = emitJump(OpCode::OP_TRY);
+    current_().tryDepth++;
+    beginScope();
+    block();
+    endScope();
+    current_().tryDepth--;
+    emitByte(OpCode::OP_POP_HANDLER);
+    size_t endJump = emitJump(OpCode::OP_JUMP);
+
+    patchJump(tryJump); // the catch block starts here
+    if (!match(TokenType::CATCH)) {
+        errorAt(peek(), "Expect 'catch' after the try block."); // one clear error: the rest of the file still compiles normally instead of cascading
+        return;
+    }
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
+    consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
+    Token name = previous();
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
+
+    beginScope();
+    current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the error value is already in its slot
+    beginScope();
+    block();
+    endScope();
+    endScope(); // pops the error value
+
+    patchJump(endJump);
+}
+
 void Compiler::breakStatement() {
     Token keyword = previous();
     consume(TokenType::SEMICOLON, "Expect ';' after 'break'.");
@@ -1125,6 +1158,7 @@ void Compiler::breakStatement() {
         return;
     }
     emitLoopLocalsCleanup(current_().loops.back().scopeDepth);
+    emitHandlerPops(current_().loops.back().tryDepth);
     size_t jump = emitJump(OpCode::OP_JUMP);
     current_().loops.back().breakJumps.push_back(jump);
 }
@@ -1137,6 +1171,7 @@ void Compiler::continueStatement() {
         return;
     }
     emitLoopLocalsCleanup(current_().loops.back().scopeDepth);
+    emitHandlerPops(current_().loops.back().tryDepth);
     emitLoop(current_().loops.back().continueTarget);
 }
 

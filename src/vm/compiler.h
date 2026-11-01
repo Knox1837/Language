@@ -28,6 +28,7 @@ struct LoopInfo {
     int scopeDepth;                    // scope depth of the loop itself; locals declared DEEPER than this belong to the body and must be discarded when a break/continue leaves it
     size_t continueTarget;             // where `continue` jumps back to: the condition for a while loop, the increment clause for a for loop that has one
     std::vector<size_t> breakJumps;    // forward jumps emitted by `break`, patched to land just after the loop
+    int tryDepth = 0;                  // how many try bodies were open when the loop began: a break/continue inside the body unregisters the handlers of every try it leaves (those deeper than this)
 };
 
 // Compile-time state for ONE function currently being compiled (the top-level script is FunctionState #0). 
@@ -39,6 +40,7 @@ struct FunctionState {
     int scopeDepth = 0;
     bool reportedConstantOverflow = false; // so a function that runs out of constants gets ONE error message, not one per extra constant
     FunctionType type = FunctionType::SCRIPT;
+    int tryDepth = 0;                 // try BODIES currently open at this point of the code (a catch body is not inside its handler)
     std::vector<LoopInfo> loops = {}; // loops enclosing the current position in THIS function, innermost last (a loop outside a function does not make `break` legal inside it)
 };
 
@@ -113,6 +115,8 @@ private:
     void breakStatement();    // "break" ";"     -> discard the body's locals, jump past the loop
     void continueStatement(); // "continue" ";" -> discard the body's locals, jump to the next iteration
     void emitLoopLocalsCleanup(int loopScopeDepth); // emits the pops / upvalue-closes for every local deeper than loopScopeDepth WITHOUT forgetting them (code after the jump is still compiled in their scope)
+    void tryStatement();      // "try" block "catch" "(" IDENTIFIER ")" block
+    void emitHandlerPops(int downToTryDepth); // OP_POP_HANDLER for every try body open now that was not open at `downToTryDepth`: a break/continue is leaving them
     void forStatement();
     void forInStatement(); // the rest of "for (var x in xs) body" once the "(" is consumed
     bool checkAhead(int offset, TokenType type) const; // is the token `offset` places after the current one this type? (false past the end)
