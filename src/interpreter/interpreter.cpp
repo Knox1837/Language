@@ -96,7 +96,7 @@ void Interpreter::visitUnaryExpr(Unary& expr) {
     }
 }
 
-// Shared arithmetic logic for +, -, *, /, % — used by both plain binary expressions (a + b) and compound assignment (a += b), so the two stay perfectly consistent and this logic isn't duplicated.
+// Shared arithmetic logic for +, -, *, /, % - used by both plain binary expressions (a + b) and compound assignment (a += b), so the two stay perfectly consistent and this logic isn't duplicated.
 Value Interpreter::applyArithmeticOp(TokenType op, const Token& opToken, const Value& left, const Value& right) {
     switch (op) {
         case TokenType::MINUS:
@@ -221,7 +221,13 @@ void Interpreter::visitCallExpr(Call& expr) {
         throw RuntimeError(expr.paren, arityMessage(function->arity(), function->maxArity(), arguments.size()));
     }
 
-    result = function->call(*this, arguments);
+    try {
+        result = function->call(*this, arguments);
+    } catch (const RuntimeError& error) {
+        // error(value) is a native with no source token, so it is raised with line 0; give it the line of THIS call. (Other natives keep their [line 0], as documented.)
+        if (error.thrown && error.token.line == 0) throw makeThrownError(expr.paren, *error.thrown);
+        throw;
+    }
 }
 
 void Interpreter::visitGetExpr(Get& expr) {
@@ -326,6 +332,29 @@ void Interpreter::visitContinueStmt(ContinueStmt&) {
     loopSignal = LoopSignal::CONTINUE;
 }
 
+void Interpreter::visitTryStmt(TryStmt& stmt) {
+    std::shared_ptr<Environment> savedEnvironment = environment;
+    try {
+        execute(*stmt.tryBody);
+        return; // no error (a `return`, which travels as a ReturnException, and `break`/`continue`, which set loopSignal, pass straight through)
+    } catch (const RuntimeError& error) {
+        environment = savedEnvironment; // normally already restored by the blocks the error unwound through; be certain
+        Value caught = error.thrown ? *error.thrown : Value{std::string(error.what())};
+
+        // The handler runs in a scope holding just the caught value, with its block one level inside, like the VM's scopes.
+        auto catchEnvironment = std::make_shared<Environment>(savedEnvironment);
+        catchEnvironment->define(stmt.name.lexeme, caught);
+        environment = std::move(catchEnvironment);
+        try {
+            execute(*stmt.catchBody);
+        } catch (...) {
+            environment = savedEnvironment; // an error (or return) inside the handler travels outward
+            throw;
+        }
+        environment = savedEnvironment;
+    }
+}
+
 void Interpreter::visitForInStmt(ForInStmt& stmt) {
     Value iterable = evaluate(*stmt.iterable); // evaluated once, before the loop
 
@@ -425,8 +454,7 @@ void Interpreter::visitImportStmt(ImportStmt& stmt) {
 }
 
 void Interpreter::visitSuperExpr(Super& expr) {
-    // "super" and "this" were bound at different points in the scope chain (super one level above the method's own closure, this one level below it via bind()) 
-    //both are just found by walking upward, since neither name is ever shadowed by user code
+    // "super" and "this" were bound at different points in the scope chain (super one level above the method's own closure, this one level below it via bind()) both are just found by walking upward, since neither name is ever shadowed by user code
     Value superclassValue = environment->get(expr.keyword);
     auto superclass = std::dynamic_pointer_cast<LoxClass>(std::get<std::shared_ptr<Callable>>(superclassValue));
 

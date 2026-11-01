@@ -12,6 +12,7 @@
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
 // forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
+// tryStmt     -> "try" block "catch" "(" IDENTIFIER ")" block
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
 // exprStmt    -> expression ";" | target ( "++" | "--" ) ";"   (a statement only; sugar for target += 1 / target -= 1. The same form is allowed as the increment clause of a classic for)
@@ -153,6 +154,7 @@ StmtPtr Parser::statement() {
     if (match({TokenType::RETURN})) return returnStatement();
     if (match({TokenType::BREAK})) return breakStatement();
     if (match({TokenType::CONTINUE})) return continueStatement();
+    if (match({TokenType::TRY})) return tryStatement();
     if (match({TokenType::LEFT_BRACE})) {
         return std::make_unique<BlockStmt>(block());
     }
@@ -261,6 +263,18 @@ StmtPtr Parser::forInStatement() {
         body = statement();
     }
     return std::make_unique<ForInStmt>(std::move(name), std::move(paren), std::move(iterable), std::move(body));
+}
+
+StmtPtr Parser::tryStatement() {
+    consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
+    StmtPtr tryBody = std::make_unique<BlockStmt>(block());
+    consume(TokenType::CATCH, "Expect 'catch' after the try block.");
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
+    Token name = consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
+    StmtPtr catchBody = std::make_unique<BlockStmt>(block());
+    return std::make_unique<TryStmt>(std::move(tryBody), std::move(name), std::move(catchBody));
 }
 
 StmtPtr Parser::returnStatement() {

@@ -6,6 +6,7 @@
 #include "array_lib.h"
 #include "type_lib.h"
 #include "map_lib.h"
+#include "native_function.h"
 
 void registerStdlib(std::shared_ptr<Environment> globals) {
     registerMathLib(globals);
@@ -14,4 +15,10 @@ void registerStdlib(std::shared_ptr<Environment> globals) {
     registerArrayLib(globals);
     registerTypeLib(globals);
     registerMapLib(globals);
+
+    // error(value): raises `value` as a runtime error. A `try`/`catch` receives the value itself; uncaught, it prints "[line N] Runtime error: " and the value's printed form.
+    globals->define("error", Value{std::make_shared<NativeFunction>("error", 1, [](Interpreter&, std::vector<Value>& args) -> Value {
+            throw makeThrownError(Token(TokenType::IDENTIFIER, "error", 0), args[0]);
+        }
+    )});
 }

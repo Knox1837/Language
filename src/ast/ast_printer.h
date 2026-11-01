@@ -45,6 +45,7 @@ public:
     void visitBreakStmt(BreakStmt& stmt) override;
     void visitContinueStmt(ContinueStmt& stmt) override;
     void visitForInStmt(ForInStmt& stmt) override;
+    void visitTryStmt(TryStmt& stmt) override;
 
 private:
     std::string result; // visit methods write here; print() reads it back out

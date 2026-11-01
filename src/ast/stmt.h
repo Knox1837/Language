@@ -17,6 +17,7 @@ struct ImportStmt;
 struct BreakStmt;
 struct ContinueStmt;
 struct ForInStmt;
+struct TryStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -32,6 +33,7 @@ struct StmtVisitor {
     virtual void visitBreakStmt(BreakStmt& stmt) = 0;
     virtual void visitContinueStmt(ContinueStmt& stmt) = 0;
     virtual void visitForInStmt(ForInStmt& stmt) = 0;
+    virtual void visitTryStmt(TryStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -153,7 +155,7 @@ struct ContinueStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitContinueStmt(*this); }
 };
 
-// for (var name in iterable) body: runs `body` once per element of an array, or once per KEY of a map (keys come out in the map's own sorted order).
+// for (var name in iterable) body   -- runs `body` once per element of an array, or once per KEY of a map (keys come out in the map's own sorted order).
 // The iterable is evaluated once, before the loop. Each iteration gets a fresh scope holding its own copy of the loop variable, so a closure created in the body keeps that iteration's value. `break` and `continue` work as in any other loop.
 struct ForInStmt : Stmt {
     Token name;      // the loop variable
@@ -163,4 +165,15 @@ struct ForInStmt : Stmt {
     ForInStmt(Token name, Token paren, ExprPtr iterable, StmtPtr body)
         : name(std::move(name)), paren(std::move(paren)), iterable(std::move(iterable)), body(std::move(body)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitForInStmt(*this); }
+};
+
+// try { body } catch (name) { handler }
+// Runs `body`. If a runtime error is raised inside it (by the language, a built-in, or error(value)), the rest of the body is abandoned and `handler` runs with `name` bound to the error: the thrown value for error(value), the message string for anything else. Both bodies are BlockStmts.
+struct TryStmt : Stmt {
+    StmtPtr tryBody;
+    Token name;        // the catch variable
+    StmtPtr catchBody;
+    TryStmt(StmtPtr tryBody, Token name, StmtPtr catchBody)
+        : tryBody(std::move(tryBody)), name(std::move(name)), catchBody(std::move(catchBody)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitTryStmt(*this); }
 };

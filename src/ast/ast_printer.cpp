@@ -184,6 +184,15 @@ void ASTPrinter::visitBreakStmt(BreakStmt&) {
 void ASTPrinter::visitContinueStmt(ContinueStmt&) {
     result = "(continue)";
 }
+void ASTPrinter::visitTryStmt(TryStmt& stmt) {
+    std::ostringstream out;
+    stmt.tryBody->accept(*this);
+    out << "(try " << result;
+    stmt.catchBody->accept(*this);
+    out << " catch " << stmt.name.lexeme << " " << result << ")";
+    result = out.str();
+}
+
 void ASTPrinter::visitForInStmt(ForInStmt& stmt) {
     std::ostringstream out;
     out << "(for-in " << stmt.name.lexeme << " " << print(*stmt.iterable);

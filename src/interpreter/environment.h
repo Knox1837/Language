@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include "../lexer/token.h"
 #include "value.h"
@@ -12,9 +13,18 @@
 // Thrown for runtime errors tied to a specific token (undefined variable, type mismatch in an operator, etc.) so the top-level runner can report "[line N] ...".
 struct RuntimeError : std::runtime_error {
     Token token;
+    // Set only by error(value): the value itself, so a `catch` gets back exactly what was thrown. A failure raised by the language or a built-in has none, and its `catch` receives the message string.
+    std::optional<Value> thrown;
     RuntimeError(Token token, const std::string& message)
         : std::runtime_error(message), token(std::move(token)) {}
 };
+
+// error(value) as a RuntimeError: the message (what an uncaught error prints) is the value's printed form. A named function, not a second constructor, because a string literal would convert to Value (as a bool!) as readily as to std::string and make every `RuntimeError(token, "...")` ambiguous.
+inline RuntimeError makeThrownError(Token token, const Value& value) {
+    RuntimeError error(std::move(token), stringifyValue(value));
+    error.thrown = value;
+    return error;
+}
 
 class Environment {
 public:
