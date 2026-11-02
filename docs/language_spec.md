@@ -19,11 +19,11 @@ declarations (`def`, no return-type annotations).
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
 class     this      super     import    as        break     continue
-in
+in        try       catch
 ```
 
-`in` is reserved (it is the keyword of the for-in loop), so it can no longer be
-used as a variable or function name.
+`in`, `try` and `catch` are reserved, so they can no longer be used as variable
+or function names.
 
 ## Data types
 
@@ -136,7 +136,7 @@ funExpr     -> "def" "(" parameters? ")" block
 parameters  -> IDENTIFIER ( "," IDENTIFIER )*
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
-             | breakStmt | continueStmt | block
+             | breakStmt | continueStmt | tryStmt | block
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt   -> "while" "(" expression ")" statement
 forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" incrementClause? ")" statement
@@ -145,6 +145,7 @@ incrementClause -> expression | target ( "++" | "--" )
 returnStmt  -> "return" expression? ";"
 breakStmt   -> "break" ";"
 continueStmt -> "continue" ";"
+tryStmt     -> "try" block "catch" "(" IDENTIFIER ")" block
 block       -> "{" declaration* "}"
 exprStmt    -> expression ";"
              | target ( "++" | "--" ) ";"       (target: IDENTIFIER, call "." IDENTIFIER or call "[" expression "]")
@@ -623,6 +624,12 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
 |---|---|---|
 | `input()` | () → string | reads one line from stdin; returns `""` on EOF (no prompt argument — print your own prompt first) |
 
+**Errors**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `error(value)` | any → (never returns) | raises `value` as a runtime error: see "Error handling" |
+
 **Type checks**
 
 | Function | Signature | Notes |
@@ -633,7 +640,8 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
 Native functions raise the same `RuntimeError` mechanism as the rest of
 the interpreter, but since they aren't tied to a specific AST node, the
 tree-walking interpreter reports their errors at line `0` rather than the
-calling line (the VM reports the line of the call).
+calling line (the VM reports the line of the call). The exception is
+`error(value)`, which both engines report at the line of the call.
 
 **VM-only functions:** `gc()` runs the garbage collector and returns how many
 objects it freed, and `heapSize()` returns how many heap objects exist. They
@@ -648,16 +656,65 @@ interpreter does not define them.
 - **Runtime errors** (undefined variable, type mismatch, division by
   zero, wrong argument count, calling a non-function, accessing a
   property on a non-instance, undefined property, invalid superclass,
-  array index out of range/wrong type) are reported with a line number
-  and halt execution of that script/REPL line.
+  array index out of range/wrong type, anything raised with `error`) are
+  reported with a line number and halt execution of that script/REPL line,
+  unless a `try` catches them.
+
+### Raising and catching errors
+
+`error(value)` raises `value` as a runtime error. It may be any value: a string,
+a number, a map, an array. `try { ... } catch (name) { ... }` runs the first
+block; if an error is raised anywhere inside it, including inside functions it
+calls, the rest of the block is abandoned and the second block runs with `name`
+bound to the error.
+
+```
+def withdraw(balance, amount) {
+    if (amount > balance) error("insufficient funds");
+    return balance - amount;
+}
+
+try {
+    print withdraw(50, 80);
+} catch (e) {
+    print "failed: " + e;          // failed: insufficient funds
+}
+```
+
+- **What `name` holds.** For `error(value)` it is `value` itself, unchanged
+  (`error({"code": 7})` is caught as the map). For an error the language or a
+  built-in raises (undefined variable, `10 / 0`, an array index out of range,
+  `len(5)`, calling a non-function, ...) it is the message as a string, without
+  the `[line N] Runtime error:` prefix: `Undefined variable 'x'.`,
+  `Division by zero.`. A caught language error does not carry its line number.
+- **Where it unwinds to.** The innermost enclosing `try` wins. Errors travel out
+  through any number of function calls, method calls, constructors, imports and
+  callbacks that `map`, `filter`, `reduce` and `sort` run; locals the abandoned
+  code had are discarded (a closure that captured one keeps its value).
+- **No error, no catch.** If the first block finishes normally the second block
+  is skipped.
+- **Errors inside the catch block** are not caught by the same `try`; they
+  travel outward. To rethrow, raise the caught value again: `catch (e) { error(e); }`.
+- **`return`, `break` and `continue`** work from inside either block: `return`
+  leaves the function, and `break`/`continue` leave the `try` and act on the
+  enclosing loop.
+- **Scope.** `name` exists only inside the catch block, and may shadow an outer
+  variable of the same name. Variables declared in the first block do not exist
+  in the second.
+- **Uncaught.** An error that no `try` catches stops the program and prints
+  `[line N] Runtime error: ` followed by the message, or by the printed form of
+  the thrown value (`error([1, 2])` prints `[1, 2]`). `N` is the line where the
+  error was raised.
+- **Not catchable:** syntax errors (the program never starts).
+- There is no `finally`.
 
 ## Not yet implemented
 
 Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
-- **Raising and handling errors from a script:** no `try`/`catch`, no
-  `error(...)` function. Every runtime error stops the program.
+- **`finally`, and details of a caught error:** there is no `finally` block, and
+  a caught language error is only its message string (no line number, no kind).
 - **File I/O:** no way to read or write a file from a script (`input()` reads
   standard input only).
 - **Non-string map keys** (map literals and `m[k]` accept strings only).

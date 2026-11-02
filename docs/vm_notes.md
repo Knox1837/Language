@@ -757,11 +757,13 @@ mechanism:
   or classes without `init()`, push no frame and are already finished.
 - Natives are plain functions with no VM parameter, so they reach the VM through
   `VM::active()`, set (and restored) for the duration of `interpret()`.
-- **Errors are reported once.** `runtimeError` prints, unwinds everything and sets
-  `errorReported`. A callback that fails returns `false` from `callFunction`; the
-  native returns `false` with an EMPTY message, and `callValue` skips its own
-  `runtimeError` when the flag is set (it would print a second, empty error with
-  line -1). `interpret()` clears the flag.
+- **Errors are raised once.** `runtimeError` records the error and sets
+  `errorPending` (see "error(), try and catch"). A callback that fails returns
+  `false` from `callFunction`; the native returns `false` with an EMPTY message,
+  and `callValue` skips its own `runtimeError` when the flag is set (it would
+  replace the real error with an empty one). The error then travels outward
+  through the native to whichever `run()` can deliver it. `interpret()` clears
+  the flag.
 - **Snapshots.** Every operation iterates over a copy of the elements, because a
   callback is arbitrary script code and may push to the array being processed.
   `sort` sorts a copy and assigns it back only on success.
@@ -1011,6 +1013,87 @@ like `visitWhileStmt`.
 **`in` is now a keyword**, so `var in = 1;` is a syntax error in both engines.
 It is a real keyword rather than a word treated specially after `var x`, which
 keeps the lexer context-free.
+
+## Design note: error(), try and catch
+
+`error(value)` raises any value; `try { } catch (e) { }` catches it (see "Raising
+and catching errors" in `language_spec.md`). An error the language or a native
+raises is caught as its message string; `error(value)` is caught as `value`.
+
+**Tree-walker.** Runtime errors were already C++ exceptions, so `try` is a C++
+`try`. `RuntimeError` gained an optional `thrown` value, set by `error(value)`
+through `makeThrownError` (a named function, because a second constructor taking
+a `Value` would make every `RuntimeError(token, "text")` ambiguous: a string
+literal converts to `Value` as a `bool` as readily as to `std::string`).
+`visitTryStmt` catches `RuntimeError` only, so a `return` (a `ReturnException`)
+and `break`/`continue` (`loopSignal`) pass through untouched. It restores the
+environment, binds the caught value in a fresh scope and runs the handler there,
+restoring again if the handler itself throws. Nothing else needed to change: the
+blocks the error unwinds through already restore their scope, and the module
+loader already forgets a half-loaded file. `error` is a native with no source
+token, so it throws at line 0 and `visitCallExpr` re-raises it with the line of
+the call (other natives keep their `[line 0]`).
+
+**VM: raising and delivering are separate.** Before, `runtimeError` printed and
+wiped the stack on the spot. Now it only records the error (`pendingValue`,
+`pendingLine`, `errorPending`) and returns, and the roughly fifty places that call
+it already went on to leave the instruction loop with `RUNTIME_ERROR`, so none of
+them changed. The loop itself was renamed `runLoop`, and `run` is a small loop
+around it: when `runLoop` stops on an error, `unwindToHandler` looks for a handler
+and, if it finds one, execution resumes in the catch block; if not, the outermost
+`run` prints the error (`reportUncaughtError`, the old behavior) and a nested one
+returns failure.
+
+**Handlers.** `OP_TRY` (operand: forward offset to the catch block) pushes a
+`TryHandler { frameCount, stackHeight, catchIp }`; `OP_POP_HANDLER` removes the
+innermost one.
+
+```
+OP_TRY -> catch          stack height here = frame base + the locals alive now
+<body>                   its own scope
+OP_POP_HANDLER           the body finished without an error
+OP_JUMP -> end
+catch:                   the unwinder has pushed the error value: that slot is `e`
+<handler>                `e` in a scope of its own, the block one level inside
+pop e
+end:
+```
+
+Unwinding to a handler: close the upvalues at or above `stackHeight` (before the
+slots are reused, as on return), pop the frames above `frameCount` (forgetting
+any import they were running, or a later import of that file would be reported
+as circular), cut the stack back to `stackHeight`, push the error value, set the
+frame's `ip` to `catchIp`. Because a statement starts with no temporaries on the
+stack, the stack height equals the number of locals, so the pushed value lands in
+exactly the slot the compiler gave the catch variable.
+
+**Which handler a `run()` may use.** A handler belongs to frame `frameCount - 1`.
+A `run(baseFrames)` is responsible for frames from index `baseFrames` up, so it
+may use a handler only if `frameCount > baseFrames`. A nested `run` (a callback
+a native is running) therefore cannot jump past the native's C++ frame; with no
+handler of its own it returns failure, `callFunction` returns false, the native
+returns false, and the outer `run` looks again with the error still pending,
+using a handler in an outer frame if there is one. The abandoned frames and
+stack are cut back by that outer unwind.
+
+**Keeping the handler stack exact.** It must contain exactly the try bodies that
+are executing, innermost last, or an error would jump to a stale `catchIp`.
+Normal exit pops (`OP_POP_HANDLER`); `OP_RETURN` drops every handler of the frame
+it leaves (so `return` inside a `try` needs no compiled code); an error pops the
+handler it uses. `break` and `continue` are the compile-time part:
+`FunctionState::tryDepth` counts the try bodies open at the current point (a
+catch body is not inside its handler), each `LoopInfo` remembers the depth when
+the loop began, and a jump out emits one `OP_POP_HANDLER` per try it leaves.
+
+**The collector.** `pendingValue` is an ordinary `VMValue` member, so it counts as
+a reference from outside the heap and keeps a thrown array alive while the error
+travels, with no special root. It is cleared when the error is caught or
+reported. `test_vm_try_gc` checks this under the stress build (a collection
+between nearly every pair of instructions), including thrown cycles and
+callbacks that fail.
+
+**`error` itself** is a native that calls `VM::raiseError(value)` and returns
+false with no message, the same convention a failed callback uses.
 
 ## Design note: garbage collection
 
@@ -1270,7 +1353,8 @@ the tests compare them line by line. What still differs:
   rest of the file anyway, as it does for any syntax error. (Before this, the
   VM ran programs that only had a stray character, such as `print 1;@`.)
 - **Line numbers for errors raised inside natives:** the VM reports the
-  line of the call; the tree-walker prints `[line 0]`.
+  line of the call; the tree-walker prints `[line 0]`. The one exception is
+  `error(value)`, which the tree-walker also reports at the line of the call.
 - **A failed `class A < x {}` in the REPL** leaves `A` defined as an
   empty class in the VM (the class is defined before the superclass is
   checked); the tree-walker leaves it undefined.
