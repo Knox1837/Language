@@ -1014,6 +1014,40 @@ like `visitWhileStmt`.
 It is a real keyword rather than a word treated specially after `var x`, which
 keeps the lexer context-free.
 
+## Design note: file I/O
+
+`readFile`, `readLines`, `writeFile`, `appendFile`, `fileExists` and `deleteFile`
+(see "I/O" in `language_spec.md`) are ordinary natives in both engines. The
+work is in one header-only file, `src/util/file_io.h` (namespace `fileio`),
+called by `src/stdlib/io_lib.cpp` in the tree-walker and by `registerIo` in
+`vm_stdlib.cpp`, so the two cannot drift apart: the same bytes are written, the
+same lines come back, and the error messages are the same words. Each function
+returns `false` and fills a message instead of throwing, which is exactly the
+VM native convention, and the tree-walker wraps the message in `nativeError`.
+
+Decisions worth knowing:
+
+- **Binary mode, no translation.** A script string is a sequence of bytes, so a
+  file is too. Text mode would turn `"\n"` into `"\r\n"` on Windows and back, and
+  the same program would write different bytes on different systems.
+  `readLines` is the one place line endings are interpreted, and it accepts both.
+- **A folder is never a readable file.** An `ifstream` may open a folder without
+  complaint on some systems, so `readAll` checks `is_directory` first and
+  reports the same "Could not open file" error everywhere. `deleteFile` refuses
+  folders for the same reason (`std::filesystem::remove` would delete an empty
+  one).
+- **A missing file is not an error for `deleteFile`;** it returns `false`, the
+  way `remove(map, key)` reports whether the key existed. Errors are for things
+  that went wrong, not for the answer "no".
+- **Paths are relative to the process's working directory,** not to the script,
+  because that is what every other language does with `open()`. `import` stays
+  script-relative. Paths go through the narrow-character OS API unchanged, so a
+  non-ASCII path on Windows is only as good as the system code page.
+- **No new `.cpp` file,** so `CMakeLists.txt` needs no edit.
+
+The GC needs nothing special: `readLines` builds its `VMArray` as the native's
+result, like `split`. `test_file_io` passes under the stress build.
+
 ## Design note: error(), try and catch
 
 `error(value)` raises any value; `try { } catch (e) { }` catches it (see "Raising

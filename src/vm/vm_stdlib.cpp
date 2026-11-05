@@ -9,6 +9,7 @@
 #include "vm_native.h"
 #include "vm_closure.h"
 #include "vm_function.h"
+#include "../util/file_io.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -454,6 +455,53 @@ static void registerIo(Globals& globals) {
             return true;
         }
         result = std::move(line);
+        return true;
+    });
+
+    // File functions: a relative path is relative to the folder the program was started from (not to the script). Failures are ordinary runtime errors, so a script can catch them with try/catch. The work is in util/file_io.h, shared with the tree-walker.
+    define(globals, "readFile", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        std::string text;
+        if (!fileio::readAll(asVMString(args[0]), text, error)) return false;
+        result = std::move(text);
+        return true;
+    });
+
+    define(globals, "writeFile", 2, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error) || !needString(args[1], error)) return false;
+        if (!fileio::writeAll(asVMString(args[0]), asVMString(args[1]), false, error)) return false;
+        result = std::monostate{};
+        return true;
+    });
+
+    define(globals, "appendFile", 2, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error) || !needString(args[1], error)) return false;
+        if (!fileio::writeAll(asVMString(args[0]), asVMString(args[1]), true, error)) return false;
+        result = std::monostate{};
+        return true;
+    });
+
+    define(globals, "readLines", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        std::string text;
+        if (!fileio::readAll(asVMString(args[0]), text, error)) return false;
+        auto lines = std::make_shared<VMArray>();
+        for (std::string& line : fileio::splitLines(text)) lines->elements.push_back(VMValue{std::move(line)});
+        result = VMValue{lines};
+        return true;
+    });
+
+    define(globals, "fileExists", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        result = fileio::exists(asVMString(args[0]));
+        return true;
+    });
+
+    define(globals, "deleteFile", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        bool removed = false;
+        if (!fileio::removeFile(asVMString(args[0]), removed, error)) return false;
+        result = removed;
         return true;
     });
 }

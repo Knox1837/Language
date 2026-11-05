@@ -623,6 +623,48 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
 | Function | Signature | Notes |
 |---|---|---|
 | `input()` | () → string | reads one line from stdin; returns `""` on EOF (no prompt argument — print your own prompt first) |
+| `readFile(path)` | string → string | the whole file as one string |
+| `readLines(path)` | string → array | the file's lines as an array of strings; see below |
+| `writeFile(path, text)` | string, string → nil | creates the file, or replaces its contents |
+| `appendFile(path, text)` | string, string → nil | adds `text` to the end; creates the file if it is missing |
+| `fileExists(path)` | string → bool | true if a file **or folder** exists at `path` |
+| `deleteFile(path)` | string → bool | deletes a file; returns whether there was one (a missing file is not an error). Never deletes a folder |
+
+```
+writeFile("scores.txt", "ada 90\nbob 72\n");
+appendFile("scores.txt", "cy 85\n");
+
+for (var line in readLines("scores.txt")) {
+    var parts = split(line, " ");
+    print parts[0] + " scored " + parts[1];
+}
+
+try {
+    var settings = readFile("settings.txt");
+} catch (e) {
+    print "using defaults (" + e + ")";   // Could not open file 'settings.txt' for reading.
+}
+```
+
+- **Paths.** A relative path is relative to the folder the program was **started
+  from**, not to the script file (unlike `import`, which resolves against the
+  script's folder). Forward slashes work on Windows too. The functions do not
+  create folders: `writeFile("no/such/dir/x.txt", ...)` is an error.
+- **Bytes, not translation.** Files are read and written as raw bytes, the same as a
+  script string. On Windows a `"\n"` is written as one byte, not `"\r\n"`, and a
+  `"\r\n"` in a file comes back as two characters from `readFile`.
+- **`readLines`** splits on `"\n"` and drops a `"\r"` just before it, so Unix and
+  Windows files read the same. A last line with no newline still counts, and a
+  trailing newline does not add an empty one: `"a\nb\n"` and `"a\nb"` both give
+  `[a, b]`, `""` gives `[]`, `"\n"` gives `[""]`, and `"a\n\nb"` gives `[a, "", b]`.
+- **Failures are ordinary runtime errors,** so `try`/`catch` catches them. The
+  messages are `Could not open file 'p' for reading.` (a missing file, or a folder),
+  `... for writing.` and `... for appending.` (a missing folder, no permission),
+  `Could not write to file 'p'.`, `Could not delete file 'p'.`, `Could not delete
+  'p': it is a folder.`, and `Expected a string argument.` for a non-string
+  argument. Use `str()` to write a number.
+- The tree-walker reports these at line `0` and the VM at the line of the call, like
+  every native function (see below).
 
 **Errors**
 
@@ -715,8 +757,9 @@ a parse error, or "Undefined variable" for the names that are not keywords.
 
 - **`finally`, and details of a caught error:** there is no `finally` block, and
   a caught language error is only its message string (no line number, no kind).
-- **File I/O:** no way to read or write a file from a script (`input()` reads
-  standard input only).
+- **Beyond whole-file I/O:** no reading a file a piece at a time, no binary
+  mode or seeking, no folders (listing, creating, deleting), no renaming or
+  copying. `readFile` holds the whole file in memory.
 - **Non-string map keys** (map literals and `m[k]` accept strings only).
 - **Per-file-relative import path resolution** (currently all imports resolve
   against the top-level script's directory — see Imports section above).
