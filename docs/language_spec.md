@@ -13,6 +13,33 @@ mylang is a dynamically-typed, interpreted scripting language with
 C-style syntax (braces + semicolons) and Python-inspired function
 declarations (`def`, no return-type annotations).
 
+## Comments
+
+`//` starts a comment that runs to the end of the line. `/* ... */` is a block
+comment: it may span several lines, or sit in the middle of one.
+
+```
+// a line comment
+var a = 1;   // another, after code
+
+/* a block comment
+   over two lines */
+var b = /* or in the middle of a line */ 2;
+```
+
+- **Block comments do not nest,** as in C: the first `*/` ends the comment, so
+  `/* a /* b */ c */` ends after `b` and leaves `c */` to be read as code (a syntax
+  error). To disable a stretch of code that already contains block comments, put
+  `//` in front of each line.
+- Neither kind of comment starts inside a string: `"a // b"` and `"/* x */"` are
+  just strings.
+- A `/*` with no closing `*/` is a syntax error that names the line where the
+  comment began: `[line N] Unterminated block comment.` The VM refuses to run the
+  program. The tree-walker, which carries on after syntax errors, runs whatever came
+  before the comment (the comment swallowed everything after it).
+- Line numbers in later error messages are unaffected: newlines inside a block
+  comment are counted.
+
 ## Keywords
 
 ```
@@ -770,7 +797,7 @@ a parse error, or "Undefined variable" for the names that are not keywords.
 - **Non-string map keys** (map literals and `m[k]` accept strings only).
 - **Per-file-relative import path resolution** (currently all imports resolve
   against the top-level script's directory — see Imports section above).
-- **Operators and syntax:** no block comments (`/* ... */`; `//` line comments
-  work), no prefix `++x` and no `x++` inside an expression (only as a statement).
+- **Operators and syntax:** no prefix `++x` and no `x++` inside an expression
+  (only as a statement).
 - **Number formatting:** `print` shows whole numbers as integers and any other
   number with six decimal places (`3.14` prints as `3.140000`).

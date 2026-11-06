@@ -90,6 +90,8 @@ void Lexer::scanToken() {
             if (match('/')) {
                 // comment: consume until end of line
                 while (peek() != '\n' && !isAtEnd()) advance();
+            } else if (match('*')) {
+                blockComment();
             } else if (match('=')) {
                 addToken(TokenType::SLASH_EQUAL);
             } else {
@@ -118,6 +120,22 @@ void Lexer::scanToken() {
             }
             break;
     }
+}
+
+// Skips a block comment (the "/*" is already consumed) up to and including the first "*/". Block comments do NOT nest, as in C: the first "*/" ends the comment, wherever it is. Newlines inside count towards the line number, so errors after the comment still report the right line. An unterminated one swallows the rest of the file, so the error names the line where the comment BEGAN (the end of the file would tell the reader nothing).
+void Lexer::blockComment() {
+    int startLine = line;
+    while (!isAtEnd()) {
+        if (peek() == '*' && peekNext() == '/') {
+            advance(); // *
+            advance(); // /
+            return;
+        }
+        if (peek() == '\n') line++;
+        advance();
+    }
+    std::cerr << "[line " << startLine << "] Unterminated block comment.\n";
+    errored = true;
 }
 
 // Scans a string literal (the opening quote is already consumed) and builds its VALUE: the text between the quotes with escape sequences replaced by the characters they stand for. \n newline    \t tab    \r carriage return    \\ backslash    \" double quote

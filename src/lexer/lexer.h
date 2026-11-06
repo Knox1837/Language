@@ -10,7 +10,7 @@ public:
     explicit Lexer(std::string source);
     std::vector<Token> scanTokens();
 
-    // True if scanTokens() reported any error (an unexpected character, an unterminated string, an unknown escape sequence). The message has already been printed. The tree-walking interpreter carries on regardless, as it does for any syntax error; the VM refuses to run the program.
+    // True if scanTokens() reported any error (an unexpected character, an unterminated string, an unterminated block comment, an unknown escape sequence). The message has already been printed. The tree-walking interpreter carries on regardless, as it does for any syntax error; the VM refuses to run the program.
     bool hadError() const { return errored; }
 
 private:
@@ -34,6 +34,7 @@ private:
     void addToken(TokenType type, const std::string& literalText);
 
     void string_();
+    void blockComment();
     void number();
     void identifier();
 
