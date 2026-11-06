@@ -982,14 +982,16 @@ loopStart:  OP_ITER_NEXT -> done  pushes the next element: it is the loop variab
 done:       pop position, pop array
 ```
 
-- `OP_ITER_PREP` leaves an array alone and replaces a map with a new array of
+- `OP_ITER_PREP` leaves an array or a string alone and replaces a map with a new array of
   its keys (a snapshot, so inserting into the map in the body cannot invalidate
   the walk; `std::map` order is the sorted order the tree-walker uses too).
-  Anything else is the runtime error `Can only iterate over arrays and maps.`,
+  Anything else is the runtime error `Can only iterate over arrays, maps and strings.`,
   reported with the line of the closing `)`, like the tree-walker.
-- `OP_ITER_NEXT` takes a forward jump offset like `OP_JUMP_IF_FALSE`. It reads
-  the array's length on every execution, so an array that grows or shrinks
-  under the loop is safe. The position is bumped in place in its stack slot.
+- `OP_ITER_NEXT` takes a forward jump offset like `OP_JUMP_IF_FALSE`. For an
+  array it reads the length on every execution, so an array that grows or shrinks
+  under the loop is safe. For a string it pushes the byte at the position as a
+  1-character string, the same value `s[i]` gives (a string cannot change under
+  the loop, so there is nothing to re-check, and no copy is made). The position is bumped in place in its stack slot.
 - The two hidden locals have names containing a space, so no script can name
   them, and they are ordinary locals: the collector finds the array through the
   stack, with no new root to register.

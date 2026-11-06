@@ -222,6 +222,12 @@ for (var n in [10, 20, 30]) {
     print n;                        // 10 20 30
 }
 
+var vowels = 0;
+for (var c in "education") {
+    if (c == "a" or c == "e" or c == "i" or c == "o" or c == "u") vowels++;
+}
+print vowels;                       // 5
+
 var ages = {"zed": 30, "amy": 25};
 for (var name in ages) {
     print name + "=" + str(ages[name]);   // amy=25, then zed=30
@@ -230,9 +236,10 @@ for (var name in ages) {
 
 - The collection must be an **array** (the loop variable takes each element in
   turn) or a **map** (it takes each *key*, in the map's sorted key order; look
-  the value up with `m[key]`). Anything else, a string included, is a runtime
-  error: `Can only iterate over arrays and maps.` To walk a string use a
-  three-clause `for` with `s[i]`.
+  the value up with `m[key]`) or a **string** (it takes one character at a time,
+  as a 1-character string, exactly what `s[i]` gives, so it walks **bytes**, not
+  UTF-8 characters). Anything else is a runtime error:
+  `Can only iterate over arrays, maps and strings.`
 - The `var` is required: `for (x in xs)` is a syntax error (`Expect 'var' before
   the loop variable in a for-in loop.`).
 - The collection expression is evaluated **once**, before the loop starts.
@@ -765,6 +772,5 @@ a parse error, or "Undefined variable" for the names that are not keywords.
   against the top-level script's directory — see Imports section above).
 - **Operators and syntax:** no block comments (`/* ... */`; `//` line comments
   work), no prefix `++x` and no `x++` inside an expression (only as a statement).
-  The for-in loop walks arrays and maps only, not strings.
 - **Number formatting:** `print` shows whole numbers as integers and any other
   number with six decimal places (`3.14` prints as `3.140000`).

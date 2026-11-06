@@ -155,11 +155,11 @@ struct ContinueStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitContinueStmt(*this); }
 };
 
-// for (var name in iterable) body   -- runs `body` once per element of an array, or once per KEY of a map (keys come out in the map's own sorted order).
+// for (var name in iterable) body   -- runs `body` once per element of an array, once per KEY of a map (keys come out in the map's own sorted order), or once per BYTE of a string (as a 1-character string, like s[i]).
 // The iterable is evaluated once, before the loop. Each iteration gets a fresh scope holding its own copy of the loop variable, so a closure created in the body keeps that iteration's value. `break` and `continue` work as in any other loop.
 struct ForInStmt : Stmt {
     Token name;      // the loop variable
-    Token paren;     // the ")" closing the clause, kept for line-number reporting (e.g. "Can only iterate over arrays and maps.")
+    Token paren;     // the ")" closing the clause, kept for line-number reporting (e.g. "Can only iterate over arrays, maps and strings.")
     ExprPtr iterable;
     StmtPtr body;
     ForInStmt(Token name, Token paren, ExprPtr iterable, StmtPtr body)

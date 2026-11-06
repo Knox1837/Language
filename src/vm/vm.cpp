@@ -674,7 +674,8 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                 break;
             }
             case OpCode::OP_ITER_PREP: {
-                if (isVMArray(peekStack(0))) break; // an array is walked as it is
+                if (isVMArray(peekStack(0))) break;  // an array is walked as it is
+                if (isVMString(peekStack(0))) break; // so is a string: OP_ITER_NEXT hands out one byte at a time
                 if (isVMMap(peekStack(0))) {
                     // A map is walked over a snapshot of its keys: inserting into a map mid-walk would invalidate the iteration.
                     auto keys = std::make_shared<VMArray>();
@@ -684,15 +685,26 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                     stack.back() = VMValue{keys};
                     break;
                 }
-                runtimeError("Can only iterate over arrays and maps.");
+                runtimeError("Can only iterate over arrays, maps and strings.");
                 return InterpretResult::RUNTIME_ERROR;
             }
             case OpCode::OP_ITER_NEXT: {
                 uint16_t offset = readShort();
-                // The stack is [.. array position]. Nothing below can reallocate the stack until the push at the end, so these references stay valid until then.
+                // The stack is [.. iterable position], the iterable being an array or a string. Nothing below can reallocate the stack until the push at the end, so these references stay valid until then.
                 VMValue& position = stack[stack.size() - 1];
-                const auto& array = std::get<std::shared_ptr<VMArray>>(stack[stack.size() - 2]);
+                VMValue& iterable = stack[stack.size() - 2];
                 size_t i = static_cast<size_t>(std::get<double>(position));
+                if (const std::string* text = std::get_if<std::string>(&iterable)) {
+                    if (i >= text->size()) {
+                        currentFrame().ip += offset;
+                        break;
+                    }
+                    std::get<double>(position) = static_cast<double>(i + 1);
+                    VMValue element{std::string(1, (*text)[i])}; // one byte, like s[i]; built before push(), which may reallocate the stack
+                    push(std::move(element));
+                    break;
+                }
+                const auto& array = std::get<std::shared_ptr<VMArray>>(iterable);
                 if (i >= array->elements.size()) { // re-read every time: the body may have appended to or shortened the array
                     currentFrame().ip += offset;
                     break;
