@@ -586,14 +586,15 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                     break;
                 }
                 if (isVMMap(object)) {
-                    if (!isVMString(index)) {
-                        runtimeError("Map key must be a string.");
+                    KeyCheck check = checkKey(index);
+                    if (check != KeyCheck::OK) {
+                        runtimeError(keyProblem(check));
                         return InterpretResult::RUNTIME_ERROR;
                     }
                     auto map = asVMMap(object);
-                    auto found = map->entries.find(asVMString(index));
+                    auto found = findKey(map->entries, index);
                     if (found == map->entries.end()) {
-                        runtimeError("Undefined map key '" + asVMString(index) + "'.");
+                        runtimeError("Undefined map key '" + stringifyVMValue(index) + "'.");
                         return InterpretResult::RUNTIME_ERROR;
                     }
                     push(found->second);
@@ -636,12 +637,13 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                     break;
                 }
                 if (isVMMap(object)) {
-                    if (!isVMString(index)) {
-                        runtimeError("Map key must be a string.");
+                    KeyCheck check = checkKey(index);
+                    if (check != KeyCheck::OK) {
+                        runtimeError(keyProblem(check));
                         return InterpretResult::RUNTIME_ERROR;
                     }
                     // Unlike arrays (fixed positions), maps grow freely: assigning a new key inserts it.
-                    asVMMap(object)->entries[asVMString(index)] = value;
+                    putKey(asVMMap(object)->entries, index, value);
                     push(value);
                     break;
                 }
@@ -658,7 +660,12 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                 // The stack holds key, value, key, value, ... in source order. Assigning in that order means a repeated key keeps its LAST value, like the tree-walker.
                 auto first = stack.end() - static_cast<std::ptrdiff_t>(count * 2);
                 for (auto it = first; it != stack.end(); it += 2) {
-                    map->entries[asVMString(*it)] = std::move(*(it + 1));
+                    KeyCheck check = checkKey(*it);
+                    if (check != KeyCheck::OK) {
+                        runtimeError(keyProblem(check)); // the tree-walker checks in the same order, after evaluating every key and value
+                        return InterpretResult::RUNTIME_ERROR;
+                    }
+                    putKey(map->entries, *it, std::move(*(it + 1)));
                 }
                 stack.erase(first, stack.end());
                 push(VMValue{map});
@@ -681,7 +688,7 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                     auto keys = std::make_shared<VMArray>();
                     const auto& entries = asVMMap(peekStack(0))->entries;
                     keys->elements.reserve(entries.size());
-                    for (const auto& entry : entries) keys->elements.push_back(VMValue{entry.first});
+                    for (const auto& entry : entries) keys->elements.push_back(keyToValue<VMValue>(entry.first));
                     stack.back() = VMValue{keys};
                     break;
                 }

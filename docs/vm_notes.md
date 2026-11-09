@@ -594,18 +594,22 @@ are strings only. Because the container is a sorted `std::map`,
 insertion order (`"B"` sorts before `"a"`), exactly like the
 tree-walker.
 
-**Literals.** `{"a": 1, "b": 2}` compiles each entry as its key (a
-string constant) followed by its value, then `OP_MAP n` with a 2-byte
-entry count. Keys must be string LITERALS: `{a: 1}` and `{1: 2}` are
-compile errors ("Expect string key in map literal."). Values are
-evaluated in source order, and a repeated key keeps its LAST value
-(`{"a": 1, "a": 2}` is `{"a": 2}`). A `{` at the start of a statement
+**Literals.** `{"a": 1, "b": 2}` compiles each entry as its key expression
+followed by its value expression, then `OP_MAP n` with a 2-byte entry
+count. Keys are ordinary expressions (see "Map keys" below), so `{1: 2}`,
+`{n * 2: x}` and `{flag: 1}` all compile; a bare word is a variable, not a
+string. `OP_MAP` checks every key once all the pairs are on the stack, and
+the tree-walker evaluates every key and value before checking any, so the
+two engines do the same things in the same order, and report a bad key on
+the line of the closing `}`. Keys and values are evaluated in source order,
+and a repeated key keeps its LAST value (`{"a": 1, "a": 2}` is `{"a": 2}`). A `{` at the start of a statement
 is always a block, in both engines, so a map literal needs an
 expression context (`var m = {};`, `print {...};`).
 
 **Indexing.** Maps share `OP_GET_INDEX`/`OP_SET_INDEX` with arrays,
-dispatching on the object. Reading requires a string key ("Map key must
-be a string.") that exists ("Undefined map key 'k'."); writing INSERTS
+dispatching on the object. Reading requires a valid key ("Map keys must
+be strings, numbers or booleans.") that exists ("Undefined map key 'k'.",
+the key shown as `print` shows it); writing INSERTS
 a new key or replaces an existing one, because maps grow freely where
 arrays have fixed positions. `m["k"] += v` goes through the same
 `OP_DUP2` sequence as arrays, so the lookup and its missing-key error
@@ -628,12 +632,12 @@ the free `length(x)` is a single function in `vm_array_lib.cpp` that
 accepts an array or a map. `keys()` and `values()` return NEW arrays
 (snapshots): later changes to the map don't show up in an array already
 returned. Errors: "Expected a map argument." from the free functions,
-"Key must be a string." from `hasKey`/`remove`, and "Undefined map
-method 'x'." on a bad method name.
+the key errors above from `hasKey`/`remove` (they accept any valid key),
+and "Undefined map method 'x'." on a bad method name.
 
-**Printing.** `{"a": 1, "b": text}`: keys quoted, values printed like
-top-level values (so strings appear without quotes), entries in key
-order. A map that contains itself prints `{...}` at the repeat, using
+**Printing.** `{"a": 1, "b": text}`: string keys quoted, number and
+boolean keys bare (`{1: x, "1": y}`), values printed like top-level values
+(so strings appear without quotes), entries in key order. A map that contains itself prints `{...}` at the repeat, using
 the same guard as the array `[...]`, so arrays and maps nested in each
 other in a cycle terminate too.
 
@@ -1015,6 +1019,54 @@ like `visitWhileStmt`.
 **`in` is now a keyword**, so `var in = 1;` is a syntax error in both engines.
 It is a real keyword rather than a word treated specially after `var x`, which
 keeps the lexer context-free.
+
+## Design note: map keys
+
+A map is a `std::map` in both engines (`MapObject` and `VMMap`), keyed by a
+`MapKey`: a `std::variant<bool, double, std::string>` defined once in
+`src/util/map_key.h` and shared, so the engines accept the same keys, order them
+the same way and word their errors the same way.
+
+**Which keys, and why.** Strings, numbers, booleans. `nil` is refused because an
+undefined value used as a key is nearly always a bug, and silently creating an
+entry for it hides the bug (the same reason Lua refuses it). Arrays, maps,
+functions, instances and modules are refused because the only sensible equality
+for them is identity, which would make iteration order depend on memory
+addresses and (in the VM) put heap objects in a key, which the collector would
+then have to trace. `NaN` is refused because `NaN != NaN` makes an entry
+unfindable. So keys are never heap objects, and `VMMap::traceChildren` still
+visits only the values.
+
+**Order.** `MapKeyLess` orders by the variant's index first (so booleans, then
+numbers, then strings), then by value within a type. A map with only string keys
+orders exactly as `std::map<std::string, ...>` did, so every existing listing is
+unchanged. Two numbers are one key if they compare equal, so `1` and `1.0` are
+one entry and `0` and `-0` are one entry (the first spelling stays as the key
+that is printed).
+
+**Lookup without copying.** `MapKeyLess` is a transparent comparator
+(`is_transparent`, C++14) with overloads against a bare `bool`, `double` and
+`std::string`. `findKey` dispatches on the script value's type and calls
+`map.find(bareValue)`, so reading `m["name"]` does not build a `MapKey` (which
+would copy the string) first; `putKey` looks up the same way and builds a key
+only to insert a new entry. String-keyed maps cost what they did before. The
+header's helpers (`checkKey`, `makeKey`, `keyToValue`, `findKey`, `putKey`,
+`hasKey`, `eraseKey`) are templates over the value type, because `Value` and
+`VMValue` are different variants that both hold `bool`, `double` and
+`std::string`.
+
+**The literal.** Keys are expressions (`MapLiteral` holds key/value expression
+pairs, and the compiler calls `expression()` for the key), where the old grammar
+required a string literal token. Every program that parsed before still means
+the same thing. A bare identifier used to be a syntax error and is now a
+variable reference.
+
+**One fix on the way.** The tree-walker's `m[k] += v` held an iterator into the
+map across the evaluation of `v`; if `v` removed that key, the iterator dangled.
+It now copies the current value first (as the VM already did, via `OP_DUP2` and
+`OP_GET_INDEX`) and looks the key up again to write. `test_map_keys` and
+`test_vm_map_keys_gc` cover the keys, the order and the errors, the latter under
+the stress build.
 
 ## Design note: file I/O
 

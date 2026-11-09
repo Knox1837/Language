@@ -871,12 +871,11 @@ void Compiler::arrayLiteral(bool) {
 }
 
 void Compiler::mapLiteral(bool) {
-    // The "{" is already consumed. Keys must be string LITERALS (like the tree-walker); each entry leaves its key, then its value, on the stack, and OP_MAP gathers them all.
+    // The "{" is already consumed. Each key is an expression (usually a string literal); each entry leaves its key, then its value, on the stack, and OP_MAP gathers them all and checks the keys.
     int count = 0;
     if (!check(TokenType::RIGHT_BRACE)) {
         do {
-            consume(TokenType::STRING, "Expect string key in map literal.");
-            emitConstant(VMValue{previous().lexeme});
+            expression();
             consume(TokenType::COLON, "Expect ':' after map key.");
             expression();
             if (count == 65535) {
@@ -1119,7 +1118,7 @@ void Compiler::emitHandlerPops(int downToTryDepth) {
 
 void Compiler::tryStatement() {
     // try { body } catch (e) { handler }
-   consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
     size_t tryJump = emitJump(OpCode::OP_TRY);
     current_().tryDepth++;
     beginScope();

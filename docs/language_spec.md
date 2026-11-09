@@ -64,7 +64,7 @@ or function names.
 | class  | `class C {}`   | first-class: calling a class constructs an instance |
 | instance | (result of calling a class) | holds fields, created dynamically on first assignment |
 | array  | `[1, 2, 3]`    | reference type — assigning or passing an array shares the same underlying data, like instances |
-| map    | `{"key": val}` | reference type; **string keys only** (see design note below) |
+| map    | `{"key": val}` | reference type; keys are strings, numbers or booleans (see Maps) |
 | module | (result of `import ... as name`) | a namespace exposing the imported file's top-level `def`/`class`/`var` bindings via `.` |
 
 ## String escapes
@@ -486,24 +486,49 @@ person["city"] = "Kathmandu"; // insert new key
 print person;            // {"age": 22, "city": Kathmandu, "name": Knox}
 ```
 
-- Map literals: `{"key": expr, "key2": expr2, ...}` — **keys must be
-  string literals** written directly in the source (not arbitrary
-  expressions or bare identifiers), a deliberate simplification.
-- **Design note — why string-only keys**: allowing arbitrary-type keys
-  would require `Value` itself to be hashable/orderable, which is
-  significant extra machinery for a feature most scripting languages'
-  *simplest* map type doesn't need. String keys cover the common
-  JSON-like-data use case cleanly.
+- Map literals: `{key: expr, key2: expr2, ...}`. Each key is an **expression**,
+  evaluated like any other: usually a string literal (`"name"`), but a number, a
+  boolean, a variable or a computation works too. A bare word is a variable, not
+  a string: `{name: 1}` uses the *value* of `name` as the key (an error if there
+  is no such variable), where JavaScript would use the text `"name"`.
+- **Keys** may be **strings, numbers or booleans**:
+
+  ```
+  var squares = {1: "one", 2: "four", 3: "nine"};
+  print squares[2];                  // four
+  var seen = {};
+  seen[10 * 4] = true;               // computed number keys
+  var flags = {true: "on", false: "off"};
+  print flags[3 > 2];                // on
+  ```
+
+  - Anything else (`nil`, an array, a map, a function, an instance, a module)
+    is a runtime error: `Map keys must be strings, numbers or booleans.` `nil` is
+    refused on purpose: an undefined result used as a key should fail loudly, not
+    quietly create an entry. Arrays and the other reference types are refused
+    because they would be compared by identity, which would make the iteration
+    order depend on memory addresses.
+  - A `NaN` key is refused too (`Map key can't be NaN.`): `NaN != NaN` would make
+    the entry impossible to find again.
+  - **Numbers are keys by value:** `m[1]` and `m[1.0]` are the same entry, and so
+    are `m[0]` and `m[-0]`. A number and a string never match: `m[1]` and
+    `m["1"]` are different entries, and `print` shows the difference by quoting
+    only string keys: `{1: a, "1": b}`.
+- Reading a key that does not exist is a runtime error (`Undefined map key '...'`,
+  with the key as `print` would show it: `'7'`, `'2.500000'`, `'true'`, `'nope'`).
 - Reuses the same `[]` syntax as arrays: `map["key"]` reads, `map["key"]
   = x` writes. Unlike array indexing (fixed positions, out-of-range is
   an error), map index-assignment **always succeeds** — it inserts a new
   key if one doesn't exist yet, or overwrites an existing one.
-- Reading a key that doesn't exist is a runtime error ("Undefined map
-  key '...'").
 - **Reference semantics**, same as arrays and instances — assigning or
   passing a map shares the underlying data.
-- Iteration order (when printing, or via `keys()`/`values()`) is always
-  **sorted by key**, not insertion order — deterministic and easy to test.
+- Iteration order (when printing, via `keys()`/`values()`, or in a for-in loop)
+  is always by key, never insertion order, so it is deterministic and easy to
+  test: **booleans first** (`false`, then `true`), then **numbers ascending**,
+  then **strings bytewise**. A map with only string keys is therefore sorted
+  alphabetically, as it always was. `keys()` of a map with mixed key types gives
+  an array with mixed types, which `sort()` will refuse (it needs all numbers or
+  all strings).
 - Both **method-call syntax** (`map.hasKey(k)`) and the equivalent
   **free function** (`hasKey(map, k)`) work and are fully interchangeable.
 - **Important distinction**: `.name` is only for calling a *method*
@@ -646,10 +671,10 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
 
 | Function | Signature | Notes |
 |---|---|---|
-| `keys(map)` | map → array | all keys, sorted; returns a new array (a snapshot, not a live view) |
-| `values(map)` | map → array | all values, in the same sorted-by-key order as `keys()` |
-| `hasKey(map, k)` | map, string → bool | |
-| `remove(map, k)` | map, string → bool | deletes the entry in place; returns whether it existed |
+| `keys(map)` | map → array | all keys, in key order (booleans, numbers ascending, strings bytewise); returns a new array (a snapshot, not a live view) |
+| `values(map)` | map → array | all values, in the same order as `keys()` |
+| `hasKey(map, k)` | map, string/number/bool → bool | a key of any other type is an error (see Maps) |
+| `remove(map, k)` | map, string/number/bool → bool | deletes the entry in place; returns whether it existed |
 | `length(map)` | map → number | shared with arrays — see above |
 
 **I/O**
@@ -794,7 +819,8 @@ a parse error, or "Undefined variable" for the names that are not keywords.
 - **Beyond whole-file I/O:** no reading a file a piece at a time, no binary
   mode or seeking, no folders (listing, creating, deleting), no renaming or
   copying. `readFile` holds the whole file in memory.
-- **Non-string map keys** (map literals and `m[k]` accept strings only).
+- **Map keys that are `nil`, arrays, maps, functions or instances.** Only strings,
+  numbers and booleans can be keys.
 - **Per-file-relative import path resolution** (currently all imports resolve
   against the top-level script's directory — see Imports section above).
 - **Operators and syntax:** no prefix `++x` and no `x++` inside an expression

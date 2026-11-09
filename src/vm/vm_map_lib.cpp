@@ -18,10 +18,10 @@ struct MapOpInfo {
     MapOp fn;
 };
 
-// keys()/values() return NEW arrays (snapshots), in key-sorted order; later changes to the map don't affect them.
+// keys()/values() return NEW arrays (snapshots), in key order (booleans, numbers ascending, strings bytewise); later changes to the map don't affect them.
 bool opKeys(const MapPtr& map, std::vector<VMValue>&, VMValue& result, std::string&) {
     auto out = std::make_shared<VMArray>();
-    for (const auto& entry : map->entries) out->elements.push_back(entry.first);
+    for (const auto& entry : map->entries) out->elements.push_back(keyToValue<VMValue>(entry.first));
     result = out;
     return true;
 }
@@ -34,21 +34,23 @@ bool opValues(const MapPtr& map, std::vector<VMValue>&, VMValue& result, std::st
 }
 
 bool opHasKey(const MapPtr& map, std::vector<VMValue>& rest, VMValue& result, std::string& error) {
-    if (!isVMString(rest[0])) {
-        error = "Key must be a string.";
+    KeyCheck check = checkKey(rest[0]);
+    if (check != KeyCheck::OK) {
+        error = keyProblem(check);
         return false;
     }
-    result = map->entries.count(asVMString(rest[0])) > 0;
+    result = hasKey(map->entries, rest[0]);
     return true;
 }
 
 // remove(key): deletes the entry in place; true if it existed
 bool opRemove(const MapPtr& map, std::vector<VMValue>& rest, VMValue& result, std::string& error) {
-    if (!isVMString(rest[0])) {
-        error = "Key must be a string.";
+    KeyCheck check = checkKey(rest[0]);
+    if (check != KeyCheck::OK) {
+        error = keyProblem(check);
         return false;
     }
-    result = map->entries.erase(asVMString(rest[0])) > 0;
+    result = eraseKey(map->entries, rest[0]);
     return true;
 }
 

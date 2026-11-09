@@ -67,7 +67,8 @@ static std::string stringifyImpl(const VMValue& value, std::vector<const void*>&
         for (const auto& entry : map->entries) {
             if (!first) out += ", ";
             first = false;
-            out += "\"" + entry.first + "\": " + stringifyImpl(entry.second, visiting);
+            // A string key is quoted, so {"1": x} and {1: x} look different; a number or boolean key prints bare.
+            out += (std::holds_alternative<std::string>(entry.first.value) ? "\"" + std::get<std::string>(entry.first.value) + "\"" : stringifyImpl(keyToValue<VMValue>(entry.first), visiting)) + ": " + stringifyImpl(entry.second, visiting);
         }
         out += "}";
         visiting.pop_back();
