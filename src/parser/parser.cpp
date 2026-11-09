@@ -591,17 +591,17 @@ ExprPtr Parser::primary() {
 
     // Map literal: {"key": expr, "key2": expr2, ...}. Only reachable from within expression parsing (this is primary(), not statement()) so it never conflicts with "{" starting a block: that decision is already made one level up, in statement().
     if (match({TokenType::LEFT_BRACE})) {
-        std::vector<std::pair<std::string, ExprPtr>> entries;
+        std::vector<std::pair<ExprPtr, ExprPtr>> entries;
         if (!check(TokenType::RIGHT_BRACE)) {
             do {
-                Token keyToken = consume(TokenType::STRING, "Expect string key in map literal.");
+                ExprPtr keyExpr = expression();
                 consume(TokenType::COLON, "Expect ':' after map key.");
                 ExprPtr valueExpr = expression();
-                entries.emplace_back(keyToken.lexeme, std::move(valueExpr));
+                entries.emplace_back(std::move(keyExpr), std::move(valueExpr));
             } while (match({TokenType::COMMA}));
         }
-        consume(TokenType::RIGHT_BRACE, "Expect '}' after map entries.");
-        return std::make_unique<MapLiteral>(std::move(entries));
+        Token closeBrace = consume(TokenType::RIGHT_BRACE, "Expect '}' after map entries.");
+        return std::make_unique<MapLiteral>(std::move(entries), std::move(closeBrace));
     }
 
     throw error(peek(), "Expect expression.");

@@ -3,8 +3,10 @@
 #include <map>
 #include <string>
 #include "value.h"
+#include "../util/map_key.h"
 
 class MapObject {
 public:
-    std::map<std::string, Value> entries;
+    // Keyed by string, number or boolean
+    std::map<MapKey, Value, MapKeyLess> entries;
 };

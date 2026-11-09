@@ -41,7 +41,8 @@ std::string stringifyValue(const Value& value) {
         for (auto& [key, val] : entries) {
             if (!first) out += ", ";
             first = false;
-            out += "\"" + key + "\": " + stringifyValue(val);
+            // A string key is quoted, so {"1": x} and {1: x} look different; a number or boolean key prints bare.
+            out += (std::holds_alternative<std::string>(key.value) ? "\"" + std::get<std::string>(key.value) + "\"" : stringifyValue(keyToValue<Value>(key))) + ": " + stringifyValue(val);
         }
         out += "}";
         return out;

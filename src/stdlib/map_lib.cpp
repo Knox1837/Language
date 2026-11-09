@@ -21,7 +21,7 @@ void registerMapLib(std::shared_ptr<Environment> globals) {
             auto map = requireMap("keys", args[0]);
             auto result = std::make_shared<ArrayObject>();
             for (auto& [key, value] : map->entries) {
-                result->elements.push_back(key);
+                result->elements.push_back(keyToValue<Value>(key));
             }
             return result;
         }
@@ -45,10 +45,9 @@ void registerMapLib(std::shared_ptr<Environment> globals) {
         "hasKey", 2,
         [](Interpreter&, std::vector<Value>& args) -> Value {
             auto map = requireMap("hasKey", args[0]);
-            if (!std::holds_alternative<std::string>(args[1])) {
-                throw nativeError("hasKey", "Key must be a string.");
-            }
-            return map->entries.count(std::get<std::string>(args[1])) > 0;
+            KeyCheck check = checkKey(args[1]);
+            if (check != KeyCheck::OK) throw nativeError("hasKey", keyProblem(check));
+            return hasKey(map->entries, args[1]);
         }
     )});
 
@@ -57,10 +56,9 @@ void registerMapLib(std::shared_ptr<Environment> globals) {
         "remove", 2,
         [](Interpreter&, std::vector<Value>& args) -> Value {
             auto map = requireMap("remove", args[0]);
-            if (!std::holds_alternative<std::string>(args[1])) {
-                throw nativeError("remove", "Key must be a string.");
-            }
-            return map->entries.erase(std::get<std::string>(args[1])) > 0;
+            KeyCheck check = checkKey(args[1]);
+            if (check != KeyCheck::OK) throw nativeError("remove", keyProblem(check));
+            return eraseKey(map->entries, args[1]);
         }
     )});
 }

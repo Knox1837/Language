@@ -204,12 +204,12 @@ struct IndexSet : Expr {
     void accept(ExprVisitor& visitor) override { visitor.visitIndexSetExpr(*this); }
 };
 
-// {"key1": expr1, "key2": expr2, ...}: a map literal.
-// Keys are always plain strings
+// {key1: expr1, key2: expr2, ...}: a map literal. Each key is an expression, evaluated like any other: a string, number or boolean once evaluated 
 struct MapLiteral : Expr {
-    std::vector<std::pair<std::string, ExprPtr>> entries;
-    explicit MapLiteral(std::vector<std::pair<std::string, ExprPtr>> entries)
-        : entries(std::move(entries)) {}
+    std::vector<std::pair<ExprPtr, ExprPtr>> entries; // (key, value)
+    Token closeBrace; // the "}": where a bad key is reported (the VM reports it on the same line, since its OP_MAP is emitted after the "}")
+    MapLiteral(std::vector<std::pair<ExprPtr, ExprPtr>> entries, Token closeBrace)
+        : entries(std::move(entries)), closeBrace(std::move(closeBrace)) {}
     void accept(ExprVisitor& visitor) override { visitor.visitMapLiteralExpr(*this); }
 };
 

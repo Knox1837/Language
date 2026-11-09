@@ -13,7 +13,7 @@ Value getMapMethod(std::shared_ptr<MapObject> map, const Token& name) {
         return std::make_shared<NativeFunction>("keys", 0,
             [map](Interpreter&, std::vector<Value>&) -> Value {
                 auto result = std::make_shared<ArrayObject>();
-                for (auto& [key, value] : map->entries) result->elements.push_back(key);
+                for (auto& [key, value] : map->entries) result->elements.push_back(keyToValue<Value>(key));
                 return result;
             });
     }
@@ -28,19 +28,17 @@ Value getMapMethod(std::shared_ptr<MapObject> map, const Token& name) {
     if (m == "hasKey") {
         return std::make_shared<NativeFunction>("hasKey", 1,
             [map](Interpreter&, std::vector<Value>& args) -> Value {
-                if (!std::holds_alternative<std::string>(args[0])) {
-                    throw nativeError("hasKey", "Key must be a string.");
-                }
-                return map->entries.count(std::get<std::string>(args[0])) > 0;
+                KeyCheck check = checkKey(args[0]);
+                if (check != KeyCheck::OK) throw nativeError("hasKey", keyProblem(check));
+                return hasKey(map->entries, args[0]);
             });
     }
     if (m == "remove") {
         return std::make_shared<NativeFunction>("remove", 1,
             [map](Interpreter&, std::vector<Value>& args) -> Value {
-                if (!std::holds_alternative<std::string>(args[0])) {
-                    throw nativeError("remove", "Key must be a string.");
-                }
-                return map->entries.erase(std::get<std::string>(args[0])) > 0;
+                KeyCheck check = checkKey(args[0]);
+                if (check != KeyCheck::OK) throw nativeError("remove", keyProblem(check));
+                return eraseKey(map->entries, args[0]);
             });
     }
     if (m == "length") {

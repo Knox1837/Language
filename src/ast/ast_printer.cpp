@@ -113,8 +113,8 @@ void ASTPrinter::visitIndexSetExpr(IndexSet& expr) {
 void ASTPrinter::visitMapLiteralExpr(MapLiteral& expr) {
     std::ostringstream out;
     out << "(map";
-    for (auto& [key, valueExpr] : expr.entries) {
-        out << " " << key << ":" << print(*valueExpr);
+    for (auto& [keyExpr, valueExpr] : expr.entries) {
+        out << " " << print(*keyExpr) << ":" << print(*valueExpr);
     }
     out << ")";
     result = out.str();

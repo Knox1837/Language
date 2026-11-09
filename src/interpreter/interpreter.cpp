@@ -365,7 +365,7 @@ void Interpreter::visitForInStmt(ForInStmt& stmt) {
         array = *arrayValue;
     } else if (auto* mapValue = std::get_if<std::shared_ptr<MapObject>>(&iterable)) {
         array = std::make_shared<ArrayObject>();
-        for (const auto& entry : (*mapValue)->entries) array->elements.push_back(Value{entry.first});
+        for (const auto& entry : (*mapValue)->entries) array->elements.push_back(keyToValue<Value>(entry.first));
     } else if (auto* stringValue = std::get_if<std::string>(&iterable)) {
         text = stringValue; // `iterable` keeps the string alive for the whole loop
     } else {
@@ -483,9 +483,18 @@ void Interpreter::visitArrayLiteralExpr(ArrayLiteral& expr) {
 }
 
 void Interpreter::visitMapLiteralExpr(MapLiteral& expr) {
+    // Evaluate every key and value first, in source order, and only then check the keys and insert: the same order of events as the VM, whose OP_MAP runs after all of them are on the stack. A repeated key keeps its LAST value.
+    std::vector<std::pair<Value, Value>> evaluated;
+    for (auto& [keyExpr, valueExpr] : expr.entries) {
+        Value key = evaluate(*keyExpr);
+        Value value = evaluate(*valueExpr);
+        evaluated.emplace_back(std::move(key), std::move(value));
+    }
     auto map = std::make_shared<MapObject>();
-    for (auto& [key, valueExpr] : expr.entries) {
-        map->entries[key] = evaluate(*valueExpr);
+    for (auto& [key, value] : evaluated) {
+        KeyCheck check = checkKey(key);
+        if (check != KeyCheck::OK) throw RuntimeError(expr.closeBrace, keyProblem(check));
+        putKey(map->entries, key, std::move(value));
     }
     result = map;
 }
@@ -517,14 +526,12 @@ void Interpreter::visitIndexExpr(Index& expr) {
     }
 
     if (std::holds_alternative<std::shared_ptr<MapObject>>(objectValue)) {
-        if (!std::holds_alternative<std::string>(indexValue)) {
-            throw RuntimeError(expr.bracket, "Map key must be a string.");
-        }
+        KeyCheck check = checkKey(indexValue);
+        if (check != KeyCheck::OK) throw RuntimeError(expr.bracket, keyProblem(check));
         auto map = std::get<std::shared_ptr<MapObject>>(objectValue);
-        const std::string& key = std::get<std::string>(indexValue);
-        auto it = map->entries.find(key);
+        auto it = findKey(map->entries, indexValue);
         if (it == map->entries.end()) {
-            throw RuntimeError(expr.bracket, "Undefined map key '" + key + "'.");
+            throw RuntimeError(expr.bracket, "Undefined map key '" + stringifyValue(indexValue) + "'.");
         }
         result = it->second;
         return;
@@ -566,12 +573,11 @@ void Interpreter::visitIndexSetExpr(IndexSet& expr) {
     }
 
     if (std::holds_alternative<std::shared_ptr<MapObject>>(objectValue)) {
-        if (!std::holds_alternative<std::string>(indexValue)) {
-            throw RuntimeError(expr.bracket, "Map key must be a string.");
-        }
+        KeyCheck check = checkKey(indexValue);
+        if (check != KeyCheck::OK) throw RuntimeError(expr.bracket, keyProblem(check));
         auto map = std::get<std::shared_ptr<MapObject>>(objectValue);
         // Unlike arrays (fixed positions, out-of-range is an error), maps grow freely assigning a new key inserts it, same as most scripting languages' dict/map assignment.
-        map->entries[std::get<std::string>(indexValue)] = newValue;
+        putKey(map->entries, indexValue, newValue);
         result = newValue;
         return;
     }
@@ -605,18 +611,18 @@ void Interpreter::visitCompoundIndexSetExpr(CompoundIndexSet& expr) {
     }
 
     if (std::holds_alternative<std::shared_ptr<MapObject>>(objectValue)) {
-        if (!std::holds_alternative<std::string>(indexValue)) {
-            throw RuntimeError(expr.bracket, "Map key must be a string.");
-        }
+        KeyCheck check = checkKey(indexValue);
+        if (check != KeyCheck::OK) throw RuntimeError(expr.bracket, keyProblem(check));
         auto map = std::get<std::shared_ptr<MapObject>>(objectValue);
-        const std::string& key = std::get<std::string>(indexValue);
-        auto it = map->entries.find(key);
+        auto it = findKey(map->entries, indexValue);
         if (it == map->entries.end()) {
-            throw RuntimeError(expr.bracket, "Undefined map key '" + key + "'.");
+            throw RuntimeError(expr.bracket, "Undefined map key '" + stringifyValue(indexValue) + "'.");
         }
+        // The current value is read BEFORE the right side runs, as in the VM: the right side may change the map (even remove this key), and an iterator held across it would dangle. The write then looks the key up afresh.
+        Value current = it->second;
         Value rhs = evaluate(*expr.value);
-        Value newValue = applyArithmeticOp(expr.op.type, expr.op, it->second, rhs);
-        map->entries[key] = newValue;
+        Value newValue = applyArithmeticOp(expr.op.type, expr.op, current, rhs);
+        putKey(map->entries, indexValue, newValue);
         result = newValue;
         return;
     }
