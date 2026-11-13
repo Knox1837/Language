@@ -131,6 +131,13 @@ bool VM::requireNumbers(const VMValue& a, const VMValue& b) {
     return false;
 }
 
+// Comparison operators take two numbers or two strings (the string case is handled before this is called)
+bool VM::requireOrdered(const VMValue& a, const VMValue& b) {
+    if (isVMNumber(a) && isVMNumber(b)) return true;
+    runtimeError("Operands must be two numbers or two strings.");
+    return false;
+}
+
 // Converts a script number into a position in an array of `size` elements
 // Returns false if the result isn't a valid position. Note -0.5 truncates to 0, so it IS valid
 static bool toArrayIndex(double d, size_t size, size_t& out) {
@@ -476,14 +483,22 @@ InterpretResult VM::runLoop(size_t baseFrames) {
             case OpCode::OP_GREATER: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
+                if (isVMString(a) && isVMString(b)) {
+                    push(asVMString(a).compare(asVMString(b)) > 0); // bytewise
+                    break;
+                }
+                if (!requireOrdered(a, b)) return InterpretResult::RUNTIME_ERROR;
                 push(asVMNumber(a) > asVMNumber(b));
                 break;
             }
             case OpCode::OP_LESS: {
                 VMValue b = pop();
                 VMValue a = pop();
-                if (!requireNumbers(a, b)) return InterpretResult::RUNTIME_ERROR;
+                if (isVMString(a) && isVMString(b)) {
+                    push(asVMString(a).compare(asVMString(b)) < 0); // bytewise
+                    break;
+                }
+                if (!requireOrdered(a, b)) return InterpretResult::RUNTIME_ERROR;
                 push(asVMNumber(a) < asVMNumber(b));
                 break;
             }

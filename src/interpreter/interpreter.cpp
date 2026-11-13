@@ -145,20 +145,40 @@ void Interpreter::visitBinaryExpr(Binary& expr) {
             result = applyArithmeticOp(expr.op.type, expr.op, left, right);
             return;
         case TokenType::GREATER:
-            checkNumberOperands(expr.op, left, right);
-            result = std::get<double>(left) > std::get<double>(right);
+            checkOrderedOperands(expr.op, left, right);
+            if (std::holds_alternative<std::string>(left)) {
+                // bytewise, like sort() and map key order
+                result = std::get<std::string>(left).compare(std::get<std::string>(right)) > 0;
+            } else {
+                result = std::get<double>(left) > std::get<double>(right);
+            }
             return;
         case TokenType::GREATER_EQUAL:
-            checkNumberOperands(expr.op, left, right);
-            result = std::get<double>(left) >= std::get<double>(right);
+            checkOrderedOperands(expr.op, left, right);
+            if (std::holds_alternative<std::string>(left)) {
+                // bytewise, like sort() and map key order
+                result = std::get<std::string>(left).compare(std::get<std::string>(right)) >= 0;
+            } else {
+                result = std::get<double>(left) >= std::get<double>(right);
+            }
             return;
         case TokenType::LESS:
-            checkNumberOperands(expr.op, left, right);
-            result = std::get<double>(left) < std::get<double>(right);
+            checkOrderedOperands(expr.op, left, right);
+            if (std::holds_alternative<std::string>(left)) {
+                // bytewise, like sort() and map key order
+                result = std::get<std::string>(left).compare(std::get<std::string>(right)) < 0;
+            } else {
+                result = std::get<double>(left) < std::get<double>(right);
+            }
             return;
         case TokenType::LESS_EQUAL:
-            checkNumberOperands(expr.op, left, right);
-            result = std::get<double>(left) <= std::get<double>(right);
+            checkOrderedOperands(expr.op, left, right);
+            if (std::holds_alternative<std::string>(left)) {
+                // bytewise, like sort() and map key order
+                result = std::get<std::string>(left).compare(std::get<std::string>(right)) <= 0;
+            } else {
+                result = std::get<double>(left) <= std::get<double>(right);
+            }
             return;
         case TokenType::EQUAL_EQUAL:
             result = isEqual(left, right);
@@ -655,6 +675,13 @@ void Interpreter::checkNumberOperand(const Token& op, const Value& operand) {
 void Interpreter::checkNumberOperands(const Token& op, const Value& left, const Value& right) {
     if (std::holds_alternative<double>(left) && std::holds_alternative<double>(right)) return;
     throw RuntimeError(op, "Operands must be numbers.");
+}
+
+// Comparison operators take two numbers or two strings; anything else is an error
+void Interpreter::checkOrderedOperands(const Token& op, const Value& left, const Value& right) {
+    if (std::holds_alternative<double>(left) && std::holds_alternative<double>(right)) return;
+    if (std::holds_alternative<std::string>(left) && std::holds_alternative<std::string>(right)) return;
+    throw RuntimeError(op, "Operands must be two numbers or two strings.");
 }
 
 bool Interpreter::isEqual(const Value& a, const Value& b) {

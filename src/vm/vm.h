@@ -111,6 +111,7 @@ private:
     // Type-checked arithmetic helper shared by OP_ADD/SUBTRACT/etc.
     // returns false (and reports the error) if either operand isn't a number, so run() can bail out with RUNTIME_ERROR cleanly. The message is the tree-walker's, word for word: "Operands must be numbers."
     bool requireNumbers(const VMValue& a, const VMValue& b);
+    bool requireOrdered(const VMValue& a, const VMValue& b);
 
     // Equality across any two VMValues, including different alternative types
     bool areVMEqual(const VMValue& a, const VMValue& b);

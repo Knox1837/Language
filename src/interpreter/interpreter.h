@@ -91,6 +91,7 @@ private:
     // Type-checking helpers used by binary/unary operators
     static void checkNumberOperand(const Token& op, const Value& operand);
     static void checkNumberOperands(const Token& op, const Value& left, const Value& right);
+    static void checkOrderedOperands(const Token& op, const Value& left, const Value& right);
     static bool isEqual(const Value& a, const Value& b);
     static Value applyArithmeticOp(TokenType op, const Token& opToken, const Value& left, const Value& right);
 };

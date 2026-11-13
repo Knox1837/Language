@@ -113,7 +113,7 @@ where `0` is falsey.)
 |------------|-----------|-------|
 | Arithmetic | `+ - * / %` | `/` always produces a float result; division/modulo by zero is a runtime error; `%` uses `fmod` semantics (result takes the sign of the dividend: `-7 % 3` is `-1`, not `2`) |
 | `+` overload | `number + number`, `string + string` | mixing types throws a runtime error |
-| Comparison | `> >= < <=` | numbers only |
+| Comparison | `> >= < <=` | two numbers or two strings (strings compare bytewise, the same order `sort()` and map keys use: `"Z" < "a"`, `"app" < "apple"`); any other mix is a runtime error: `Operands must be two numbers or two strings.` |
 | Equality   | `== !=` | works across any two values; different types are never equal |
 | Logical    | `and or !` | `and`/`or` short-circuit and return one of their operand values (not necessarily a bool) |
 | Assignment | `=` | itself an expression: `a = b = 5` works |

@@ -35,3 +35,6 @@ Thumbs.db
 
 # Test scripts
 test/
+
+# Benchmark results
+bench/results.md

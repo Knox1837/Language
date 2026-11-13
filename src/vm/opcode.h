@@ -23,8 +23,8 @@ enum class OpCode : uint8_t {
     OP_NIL,            // push nil
     OP_NOT,            // pop a, push (!isVMTruthy(a)) -- always yields a real bool, unlike '!' in some languages
     OP_EQUAL,          // pop b, pop a, push (a == b) -- works across any two value types, like the tree-walker's isEqual
-    OP_GREATER,        // pop b, pop a, push (a > b) -- numbers only
-    OP_LESS,           // pop b, pop a, push (a < b) -- numbers only
+    OP_GREATER,        // pop b, pop a, push (a > b) -- two numbers or two strings
+    OP_LESS,           // pop b, pop a, push (a < b) -- two numbers or two strings
     OP_JUMP,           // unconditional jump: ip += operand (a 2-byte offset, see chunk.h)
     OP_JUMP_IF_FALSE,  // PEEKS the top of stack (does not pop); if !isVMTruthy(peek), ip += operand. Peeking (not popping) is deliberate: if/while explicitly OP_POP the condition themselves afterward, and and_/or_ rely on the value surviving on the stack as their short-circuit result.
     OP_LOOP,           // unconditional BACKWARD jump: ip -= operand (used to jump back to a loop's condition)
