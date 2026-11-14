@@ -49,6 +49,23 @@ void registerTypeLib(std::shared_ptr<Environment> globals) {
         }
     )});
 
+    // type(x): the type's name as a string. Functions, native functions, classes and bound methods are all "function" (the same set isFunction() accepts).
+    globals->define("type", Value{std::make_shared<NativeFunction>(
+        "type", 1,
+        [](Interpreter&, std::vector<Value>& args) -> Value {
+            const Value& v = args[0];
+            if (std::holds_alternative<std::monostate>(v)) return std::string("nil");
+            if (std::holds_alternative<double>(v)) return std::string("number");
+            if (std::holds_alternative<bool>(v)) return std::string("bool");
+            if (std::holds_alternative<std::string>(v)) return std::string("string");
+            if (std::holds_alternative<std::shared_ptr<Callable>>(v)) return std::string("function");
+            if (std::holds_alternative<std::shared_ptr<ArrayObject>>(v)) return std::string("array");
+            if (std::holds_alternative<std::shared_ptr<MapObject>>(v)) return std::string("map");
+            if (std::holds_alternative<std::shared_ptr<LoxInstance>>(v)) return std::string("instance");
+            return std::string("module");
+        }
+    )});
+
     globals->define("isNil", Value{std::make_shared<NativeFunction>(
         "isNil", 1,
         [](Interpreter&, std::vector<Value>& args) -> Value {

@@ -10,6 +10,7 @@
 #include "vm_closure.h"
 #include "vm_function.h"
 #include "../util/file_io.h"
+#include "../util/process.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -433,6 +434,22 @@ static void registerType(Globals& globals) {
         return true;
     });
 
+    // type(x): the type's name as a string. Closures, natives, classes and bound methods are all "function" (the same set isFunction() accepts).
+    define(globals, "type", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
+        const VMValue& v = args[0];
+        const char* name = "module";
+        if (isVMNil(v)) name = "nil";
+        else if (isVMNumber(v)) name = "number";
+        else if (isVMBool(v)) name = "bool";
+        else if (isVMString(v)) name = "string";
+        else if (isVMClosure(v) || isVMFunction(v) || isVMNative(v) || isVMClass(v) || isVMBoundMethod(v)) name = "function";
+        else if (isVMArray(v)) name = "array";
+        else if (isVMMap(v)) name = "map";
+        else if (isVMInstance(v)) name = "instance";
+        result = std::string(name);
+        return true;
+    });
+
     define(globals, "isNil", 1, [](std::vector<VMValue>& args, VMValue& result, std::string&) {
         result = isVMNil(args[0]);
         return true;
@@ -529,6 +546,41 @@ static void registerError(Globals& globals) {
     });
 }
 
+// assert, exit, args: see the tree-walker's stdlib.cpp for the behavior; the two engines match.
+static void registerProcess(Globals& globals) {
+    // assert(cond) / assert(cond, message): raises `message` (any value) or "Assertion failed." when `cond` is falsy, exactly like error(value).
+    auto assertFn = std::make_shared<VMNative>("assert", 1, [](std::vector<VMValue>& args, VMValue&, std::string&) {
+        if (isVMTruthy(args[0])) return true;
+        VM::active()->raiseError(args.size() > 1 ? args[1] : VMValue{std::string("Assertion failed.")});
+        return false;
+    });
+    assertFn->maxArity = 2;
+    globals["assert"] = VMValue{assertFn};
+
+    // exit() / exit(code): ends the program at once with that exit code (default 0).
+    auto exitFn = std::make_shared<VMNative>("exit", 0, [](std::vector<VMValue>& args, VMValue&, std::string& error) {
+        int code = 0;
+        if (!args.empty()) {
+            if (!needNumber(args[0], error)) return false;
+            if (!toExitCode(asVMNumber(args[0]), code)) {
+                error = "Exit code is out of range.";
+                return false;
+            }
+        }
+        exitProcess(code);
+    });
+    exitFn->maxArity = 1;
+    globals["exit"] = VMValue{exitFn};
+
+    // args(): the command-line arguments after the script's path, as an array of strings.
+    define(globals, "args", 0, [](std::vector<VMValue>&, VMValue& result, std::string&) {
+        auto out = std::make_shared<VMArray>();
+        for (const std::string& a : scriptArgs()) out->elements.push_back(a);
+        result = out;
+        return true;
+    });
+}
+
 void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerMath(globals);
     registerString(globals);
@@ -538,4 +590,5 @@ void registerVMStdlib(std::unordered_map<std::string, VMValue>& globals) {
     registerVMMapLib(globals);   // keys, values, hasKey, remove
     registerGc(globals);         // gc, heapSize
     registerError(globals);      // error
+    registerProcess(globals);    // assert, exit, args
 }

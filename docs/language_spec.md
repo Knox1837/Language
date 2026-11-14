@@ -730,6 +730,16 @@ try {
 | Function | Signature | Notes |
 |---|---|---|
 | `error(value)` | any → (never returns) | raises `value` as a runtime error: see "Error handling" |
+| `assert(cond)` / `assert(cond, message)` | any, optional any → nil | does nothing if `cond` is truthy (not `nil`/`false`); otherwise raises `message` (any value, caught unchanged) or the string `Assertion failed.` if none was given. Raised exactly like `error(value)` |
+
+**Program**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `exit()` / `exit(code)` | optional number → (never returns) | ends the program at once with that exit code (default 0; a fractional code truncates toward zero). Output is flushed first. A `try`/`catch` cannot intercept it. A non-number is `Expected a number argument.`; a value outside the range of an int is `Exit code is out of range.` |
+| `args()` | () → array | the command-line arguments after the script's path, as an array of strings (empty if none, and in the REPL). `mylang script.mylang a b` gives `["a", "b"]`; the script's own path is not included. Options such as `--vm` are only recognised BEFORE the script's path |
+
+Exit codes: `0` normal end, `70` an uncaught runtime error (both engines), `65` a compile error (VM), `74` the script file could not be opened, or whatever `exit(code)` was given.
 
 **Type checks**
 
@@ -737,12 +747,13 @@ try {
 |---|---|---|
 | `isNumber(x)` / `isString(x)` / `isBool(x)` / `isArray(x)` / `isMap(x)` / `isNil(x)` | any → bool | |
 | `isFunction(x)` | any → bool | true for both user-defined functions AND classes (a class is callable — calling it constructs an instance) |
+| `type(x)` | any → string | `"number"`, `"string"`, `"bool"`, `"nil"`, `"array"`, `"map"`, `"function"`, `"instance"` or `"module"`. `"function"` covers everything `isFunction` accepts: functions, built-ins, classes and bound methods |
 
 Native functions raise the same `RuntimeError` mechanism as the rest of
 the interpreter, but since they aren't tied to a specific AST node, the
 tree-walking interpreter reports their errors at line `0` rather than the
 calling line (the VM reports the line of the call). The exception is
-`error(value)`, which both engines report at the line of the call.
+`error(value)` and `assert`, which both engines report at the line of the call.
 
 **VM-only functions:** `gc()` runs the garbage collector and returns how many
 objects it freed, and `heapSize()` returns how many heap objects exist. They

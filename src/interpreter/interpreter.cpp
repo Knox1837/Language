@@ -37,12 +37,14 @@ void Interpreter::run(const std::vector<StmtPtr>& statements) {
     }
 }
 
-void Interpreter::interpret(const std::vector<StmtPtr>& statements) {
+bool Interpreter::interpret(const std::vector<StmtPtr>& statements) {
     try {
         run(statements);
     } catch (const RuntimeError& error) {
         std::cerr << "[line " << error.token.line << "] Runtime error: " << error.what() << "\n";
+        return false;
     }
+    return true;
 }
 
 Value Interpreter::evaluate(Expr& expr) {

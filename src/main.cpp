@@ -9,25 +9,27 @@
 #include "parser/parser.h"
 #include "interpreter/interpreter.h"
 #include "vm/vm.h"
+#include "util/process.h"
 
 static Interpreter interpreter; // persists across REPL lines so variables/functions survive between them
 static std::vector<std::vector<StmtPtr>> allStatements; // keeps every parsed AST alive for the program's lifetime
 
-static void run(const std::string& source) {
+// Returns false if a runtime error stopped the program.
+static bool run(const std::string& source) {
     Lexer lexer(source);
     std::vector<Token> tokens = lexer.scanTokens();
 
     Parser parser(tokens);
     allStatements.push_back(parser.parse());
 
-    interpreter.interpret(allStatements.back());
+    return interpreter.interpret(allStatements.back());
 }
 
-static void runFile(const std::string& path) {
+static int runFile(const std::string& path) {
     std::ifstream file(path);
     if (!file) {
         std::cerr << "Could not open file: " << path << "\n";
-        std::exit(74);
+        return 74;
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
@@ -38,7 +40,7 @@ static void runFile(const std::string& path) {
     if (scriptDir.empty()) scriptDir = ".";
     interpreter.setModuleBaseDir(scriptDir.string());
 
-    run(buffer.str());
+    return run(buffer.str()) ? 0 : 70; // 70 on a runtime error, the same code the VM returns
 }
 
 static void runPrompt() {
@@ -90,18 +92,13 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> args(argv + 1, argv + argc);
 
     bool useVm = false;
-    std::vector<std::string> positional;
-    for (auto& arg : args) {
-        if (arg == "--vm") {
-            useVm = true;
-        } else {
-            positional.push_back(arg);
-        }
-    }
-
-    if (positional.size() > 1) {
-        std::cerr << "Usage: mylang [--vm] [script]\n";
-        return 64;
+    std::vector<std::string> positional; // the script path, if any
+    // `--vm` is only an option BEFORE the script; everything after the script's path belongs to the script (see args()).
+    size_t i = 0;
+    for (; i < args.size() && args[i] == "--vm"; i++) useVm = true;
+    if (i < args.size()) {
+        positional.push_back(args[i]);
+        scriptArgs().assign(args.begin() + i + 1, args.end());
     }
 
     if (useVm) {
@@ -110,10 +107,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (positional.size() == 1) {
-        runFile(positional[0]);
-    } else {
-        runPrompt();
-    }
+    if (positional.size() == 1) return runFile(positional[0]);
+    runPrompt();
     return 0;
 }

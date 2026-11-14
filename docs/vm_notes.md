@@ -1463,6 +1463,7 @@ the tests compare them line by line. What still differs:
 
 ```bash
 ./mylang --vm script.mylang     # run a file through the VM
+./mylang script.mylang a b      # arguments after the script go to args(); --vm must come first
 ./mylang --vm                    # VM REPL
 ./mylang script.mylang           # tree-walking interpreter (full language, default)
 ```
