@@ -381,13 +381,20 @@ void Interpreter::visitForInStmt(ForInStmt& stmt) {
     Value iterable = evaluate(*stmt.iterable); // evaluated once, before the loop
 
     // An array is walked by position and its length is re-read every time round, so elements the body appends are visited and elements it removes are not (and the loop can never run off the end). A map is walked over a snapshot of its keys, because inserting into a map mid-walk would invalidate the iteration. A string is walked one BYTE at a time, each a 1-character string, exactly what s[i] gives (a string cannot change under the loop, so no snapshot is needed).
+    // The two-variable form `for (var k, v in map)` also snapshots the map's VALUES, in the same order, so a key the body removes still comes with the value it had when the loop started.
     std::shared_ptr<ArrayObject> array;
+    std::vector<Value> mapValues;
+    bool overMap = false;
     const std::string* text = nullptr;
     if (auto* arrayValue = std::get_if<std::shared_ptr<ArrayObject>>(&iterable)) {
         array = *arrayValue;
     } else if (auto* mapValue = std::get_if<std::shared_ptr<MapObject>>(&iterable)) {
+        overMap = true;
         array = std::make_shared<ArrayObject>();
-        for (const auto& entry : (*mapValue)->entries) array->elements.push_back(keyToValue<Value>(entry.first));
+        for (const auto& entry : (*mapValue)->entries) {
+            array->elements.push_back(keyToValue<Value>(entry.first));
+            if (stmt.valueName) mapValues.push_back(entry.second);
+        }
     } else if (auto* stringValue = std::get_if<std::string>(&iterable)) {
         text = stringValue; // `iterable` keeps the string alive for the whole loop
     } else {
@@ -397,7 +404,14 @@ void Interpreter::visitForInStmt(ForInStmt& stmt) {
     for (size_t i = 0; i < (text ? text->size() : array->elements.size()); i++) {
         // A fresh scope per iteration, so a closure made in the body captures THIS iteration's variable (the VM gives every iteration its own stack slot the same way).
         auto iterationEnv = std::make_shared<Environment>(environment);
-        iterationEnv->define(stmt.name.lexeme, text ? Value{std::string(1, (*text)[i])} : array->elements[i]);
+        Value element = text ? Value{std::string(1, (*text)[i])} : array->elements[i]; // for a map, the key
+        if (stmt.valueName) {
+            // two variables: (key, value) for a map, (index, element) for an array or a string
+            iterationEnv->define(stmt.name.lexeme, overMap ? element : Value{static_cast<double>(i)});
+            iterationEnv->define(stmt.valueName->lexeme, overMap ? mapValues[i] : element);
+        } else {
+            iterationEnv->define(stmt.name.lexeme, element);
+        }
 
         std::shared_ptr<Environment> previous = environment;
         environment = std::move(iterationEnv);

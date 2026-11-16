@@ -443,13 +443,21 @@ bool Compiler::checkAhead(int offset, TokenType type) const {
 }
 
 void Compiler::forInStatement() {
-    // "for (var x in xs) body".
+    // "for (var x in xs) body" or "for (var k, v in xs) body".
     
     if (!match(TokenType::VAR)) {
         errorAt(peek(), "Expect 'var' before the loop variable in a for-in loop.");
     }
     consume(TokenType::IDENTIFIER, "Expect loop variable name.");
     Token name = previous();
+    Token valueName = name; // only meaningful when twoVars
+    bool twoVars = false;
+    if (match(TokenType::COMMA)) {
+        twoVars = true;
+        consume(TokenType::IDENTIFIER, "Expect second loop variable name.");
+        valueName = previous();
+        if (valueName.lexeme == name.lexeme) errorAt(valueName, "The two loop variables must have different names.");
+    }
     consume(TokenType::IN, "Expect 'in' after the loop variable.");
 
     beginScope(); // holds the two hidden locals
@@ -457,23 +465,28 @@ void Compiler::forInStatement() {
 
     expression();
     consume(TokenType::RIGHT_PAREN, "Expect ')' after for-in clause.");
-    emitByte(OpCode::OP_ITER_PREP); // a runtime error here reports the line of the ")", like the tree-walker
+    emitByte(twoVars ? OpCode::OP_ITER_PREP2 : OpCode::OP_ITER_PREP); // a runtime error here reports the line of the ")", like the tree-walker
     current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " iterable", previous().line), loopScopeDepth});
+    if (twoVars) {
+        // OP_ITER_PREP2 also pushed the "kind" (array/string or flattened map) just above the iterable
+        current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " kind", previous().line), loopScopeDepth});
+    }
     emitConstant(VMValue{0.0});
     current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " position", previous().line), loopScopeDepth});
 
     size_t loopStart = currentChunk().code.size();
-    size_t exitJump = emitJump(OpCode::OP_ITER_NEXT);
+    size_t exitJump = emitJump(twoVars ? OpCode::OP_ITER_NEXT2 : OpCode::OP_ITER_NEXT);
 
-    beginScope(); // one scope per iteration, holding just `x`
+    beginScope(); // one scope per iteration, holding just `x` (or `k` and `v`)
     current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the element OP_ITER_NEXT just pushed already sits in its slot
+    if (twoVars) current_().locals.push_back(LocalVar{valueName, current_().scopeDepth}); // OP_ITER_NEXT2 pushed the second value right after the first
 
     current_().loops.push_back(LoopInfo{loopScopeDepth, loopStart, {}, current_().tryDepth});
     statement();
     LoopInfo loop = std::move(current_().loops.back()); // by value: compiling the body may have grown functionStack
     current_().loops.pop_back();
 
-    endScope(); // pops `x` (closing its upvalue first if a closure captured it)
+    endScope(); // pops `x` (or `k` and `v`), closing its upvalue first if a closure captured it
     emitLoop(loopStart);
 
     patchJump(exitJump); // the iterable ran out `break` lands in the same place: it has already discarded `x` and the body's locals, so the stack is [.. array position] on both paths.
@@ -483,9 +496,10 @@ void Compiler::forInStatement() {
 }
 
 void Compiler::forStatement() {
+    // A comma right after the name can only be the two-variable form: a classic for-loop's "var i" is followed by "=" or ";".
     if (check(TokenType::LEFT_PAREN) &&
-        ((checkAhead(1, TokenType::VAR) && checkAhead(2, TokenType::IDENTIFIER) && checkAhead(3, TokenType::IN)) ||
-         (checkAhead(1, TokenType::IDENTIFIER) && checkAhead(2, TokenType::IN)))) {
+        ((checkAhead(1, TokenType::VAR) && checkAhead(2, TokenType::IDENTIFIER) && (checkAhead(3, TokenType::IN) || checkAhead(3, TokenType::COMMA))) ||
+         (checkAhead(1, TokenType::IDENTIFIER) && (checkAhead(2, TokenType::IN) || (checkAhead(2, TokenType::COMMA) && checkAhead(3, TokenType::IDENTIFIER) && checkAhead(4, TokenType::IN)))))) {
         advance(); // the "("
         forInStatement();
         return;

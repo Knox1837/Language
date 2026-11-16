@@ -195,7 +195,7 @@ void ASTPrinter::visitTryStmt(TryStmt& stmt) {
 
 void ASTPrinter::visitForInStmt(ForInStmt& stmt) {
     std::ostringstream out;
-    out << "(for-in " << stmt.name.lexeme << " " << print(*stmt.iterable);
+    out << "(for-in " << stmt.name.lexeme << (stmt.valueName ? " " + stmt.valueName->lexeme : "") << " " << print(*stmt.iterable);
     stmt.body->accept(*this);
     out << " " << result << ")";
     result = out.str();

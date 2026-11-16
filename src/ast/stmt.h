@@ -1,6 +1,7 @@
 // stmt.h: defines every kind of STATEMENT node in the AST (things that perform an action but don't themselves produce a value like var x = 1;
 #pragma once
 #include <memory>
+#include <optional>
 #include <vector>
 #include "expr.h"
 
@@ -155,15 +156,17 @@ struct ContinueStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitContinueStmt(*this); }
 };
 
-// for (var name in iterable) body   -- runs `body` once per element of an array, once per KEY of a map (keys come out in the map's own sorted order), or once per BYTE of a string (as a 1-character string, like s[i]).
+// for (var name in iterable) body | for (var name, value in iterable) body (two var form)
+// The one-variable form runs `body` once per element of an array, once per KEY of a map (keys come out in the map's own sorted order), or once per BYTE of a string (as a 1-character string, like s[i]).
 // The iterable is evaluated once, before the loop. Each iteration gets a fresh scope holding its own copy of the loop variable, so a closure created in the body keeps that iteration's value. `break` and `continue` work as in any other loop.
 struct ForInStmt : Stmt {
-    Token name;      // the loop variable
+    Token name;      // the loop variable (the key or index in the two-variable form)
+    std::optional<Token> valueName; // the second loop variable, if any
     Token paren;     // the ")" closing the clause, kept for line-number reporting (e.g. "Can only iterate over arrays, maps and strings.")
     ExprPtr iterable;
     StmtPtr body;
-    ForInStmt(Token name, Token paren, ExprPtr iterable, StmtPtr body)
-        : name(std::move(name)), paren(std::move(paren)), iterable(std::move(iterable)), body(std::move(body)) {}
+    ForInStmt(Token name, std::optional<Token> valueName, Token paren, ExprPtr iterable, StmtPtr body)
+        : name(std::move(name)), valueName(std::move(valueName)), paren(std::move(paren)), iterable(std::move(iterable)), body(std::move(body)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitForInStmt(*this); }
 };
 

@@ -736,6 +736,66 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                 push(std::move(element));
                 break;
             }
+            case OpCode::OP_ITER_PREP2: {
+                // Two-variable for-in. Leaves [.. iterable kind]; kind 0 means an array or a string is walked as it is, kind 1 means the iterable is now a flat [k0, v0, k1, v1, ..] snapshot of a map.
+                if (isVMArray(peekStack(0)) || isVMString(peekStack(0))) {
+                    push(VMValue{0.0});
+                    break;
+                }
+                if (isVMMap(peekStack(0))) {
+                    auto flat = std::make_shared<VMArray>();
+                    const auto& entries = asVMMap(peekStack(0))->entries;
+                    flat->elements.reserve(entries.size() * 2);
+                    for (const auto& entry : entries) {
+                        flat->elements.push_back(keyToValue<VMValue>(entry.first));
+                        flat->elements.push_back(entry.second);
+                    }
+                    stack.back() = VMValue{flat};
+                    push(VMValue{1.0});
+                    break;
+                }
+                runtimeError("Can only iterate over arrays, maps and strings.");
+                return InterpretResult::RUNTIME_ERROR;
+            }
+            case OpCode::OP_ITER_NEXT2: {
+                uint16_t offset = readShort();
+                // Stack [.. iterable kind position]. Nothing below can reallocate the stack until the pushes at the end, so these references stay valid until then.
+                VMValue& position = stack[stack.size() - 1];
+                bool flatMap = std::get<double>(stack[stack.size() - 2]) == 1.0;
+                VMValue& iterable = stack[stack.size() - 3];
+                size_t i = static_cast<size_t>(std::get<double>(position));
+                VMValue first, second; // built before any push(), which may reallocate the stack
+                if (flatMap) {
+                    const auto& flat = std::get<std::shared_ptr<VMArray>>(iterable);
+                    if (i >= flat->elements.size()) {
+                        currentFrame().ip += offset;
+                        break;
+                    }
+                    std::get<double>(position) = static_cast<double>(i + 2);
+                    first = flat->elements[i];
+                    second = flat->elements[i + 1];
+                } else if (const std::string* text = std::get_if<std::string>(&iterable)) {
+                    if (i >= text->size()) {
+                        currentFrame().ip += offset;
+                        break;
+                    }
+                    std::get<double>(position) = static_cast<double>(i + 1);
+                    first = static_cast<double>(i);
+                    second = std::string(1, (*text)[i]);
+                } else {
+                    const auto& array = std::get<std::shared_ptr<VMArray>>(iterable);
+                    if (i >= array->elements.size()) { // re-read every time, like the one-variable form
+                        currentFrame().ip += offset;
+                        break;
+                    }
+                    std::get<double>(position) = static_cast<double>(i + 1);
+                    first = static_cast<double>(i);
+                    second = array->elements[i];
+                }
+                push(std::move(first));
+                push(std::move(second));
+                break;
+            }
             case OpCode::OP_DUP2: {
                 // Copy both first: push() may reallocate the stack, which would invalidate references into it.
                 VMValue below = peekStack(1);

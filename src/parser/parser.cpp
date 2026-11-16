@@ -11,7 +11,7 @@
 // statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
-// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
+// forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER ( "," IDENTIFIER )? "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
 // tryStmt     -> "try" block "catch" "(" IDENTIFIER ")" block
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
@@ -197,9 +197,9 @@ StmtPtr Parser::forStatement() {
     // "for (init; cond; incr) body" into: { init; while (cond) { body; incr; }}
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
 
-    // "for (var x in xs)"- told apart from the three-clause form by looking two tokens past "var". "for (x in xs)" (the "var" forgotten) is routed here too, so it gets one clear message instead of a cascade.
-    if ((check(TokenType::VAR) && checkAhead(1, TokenType::IDENTIFIER) && checkAhead(2, TokenType::IN)) ||
-        (check(TokenType::IDENTIFIER) && checkAhead(1, TokenType::IN))) {
+    // "for (var x in xs)"- told apart from the three-clause form by looking two tokens past "var". "for (x in xs)" (the "var" forgotten) is routed here too, so it gets one clear message instead of a cascade. "for (var k, v in m)": a comma right after the name can only be the two-variable form.
+    if ((check(TokenType::VAR) && checkAhead(1, TokenType::IDENTIFIER) && (checkAhead(2, TokenType::IN) || checkAhead(2, TokenType::COMMA))) ||
+        (check(TokenType::IDENTIFIER) && (checkAhead(1, TokenType::IN) || (checkAhead(1, TokenType::COMMA) && checkAhead(2, TokenType::IDENTIFIER) && checkAhead(3, TokenType::IN))))) {
         return forInStatement();
     }
 
@@ -253,6 +253,11 @@ StmtPtr Parser::forInStatement() {
         error(peek(), "Expect 'var' before the loop variable in a for-in loop."); // reported, not thrown, so the rest of the loop still parses
     }
     Token name = consume(TokenType::IDENTIFIER, "Expect loop variable name.");
+    std::optional<Token> valueName;
+    if (match({TokenType::COMMA})) {
+        valueName = consume(TokenType::IDENTIFIER, "Expect second loop variable name.");
+        if (valueName->lexeme == name.lexeme) error(*valueName, "The two loop variables must have different names.");
+    }
     consume(TokenType::IN, "Expect 'in' after the loop variable.");
     ExprPtr iterable = expression();
     Token paren = consume(TokenType::RIGHT_PAREN, "Expect ')' after for-in clause.");
@@ -262,7 +267,7 @@ StmtPtr Parser::forInStatement() {
         DepthGuard inLoop(loopDepth, loopDepth + 1);
         body = statement();
     }
-    return std::make_unique<ForInStmt>(std::move(name), std::move(paren), std::move(iterable), std::move(body));
+    return std::make_unique<ForInStmt>(std::move(name), std::move(valueName), std::move(paren), std::move(iterable), std::move(body));
 }
 
 StmtPtr Parser::tryStatement() {
