@@ -289,6 +289,37 @@ for (var name in ages) {
   scope is the loop: it is not visible afterwards, and it may shadow an outer
   variable of the same name.
 
+### Two loop variables
+
+`for (var k, v in collection) body` gives the body two variables per iteration:
+
+```
+var ages = {"zed": 30, "amy": 25};
+for (var name, age in ages) {
+    print name + "=" + str(age);          // amy=25, then zed=30
+}
+
+for (var i, x in ["a", "b"]) print str(i) + ":" + x;      // 0:a, then 1:b
+for (var i, c in "hi") print str(i) + ":" + c;            // 0:h, then 1:i
+```
+
+- **Map:** the first variable is the *key*, the second the *value*, in the map's
+  sorted key order. The loop walks a snapshot of both the keys and the values
+  taken before it starts: a key the body removes is still visited, with the
+  value it had at the start, and a value the body overwrites is not seen (a
+  value that is itself an array or map is a reference, so changes to its
+  contents are).
+- **Array:** the first variable is the **index** (a number, from 0) and the
+  second the element. The array is walked exactly as in the one-variable form
+  (its length is re-read each time).
+- **String:** the first variable is the byte's index and the second that byte as
+  a 1-character string.
+- The two names must differ (`The two loop variables must have different
+  names.`); `var` is still required, and everything else above (a fresh pair of
+  variables per iteration, `break`/`continue`/`return`, the error for anything
+  that is not an array, map or string) is the same.
+- Only two variables are supported; `for (var a, b, c in x)` is a syntax error.
+
 ## Break and continue
 
 `break;` leaves the innermost enclosing `while`, `for` or for-in loop immediately.

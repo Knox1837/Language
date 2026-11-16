@@ -1009,6 +1009,17 @@ done:       pop position, pop array
   `OP_ITER_NEXT`. `break` and the normal exit land on the same instruction, so
   one `endScope()` after them pops the two hidden locals on both paths.
 
+**Two variables.** `for (var k, v in xs) body` uses two more opcodes and leaves the
+one-variable ones alone. `OP_ITER_PREP2` leaves an array or a string alone and
+pushes the number 0 above it, or replaces a map with a new FLAT array
+`[k0, v0, k1, v1, ..]` (a snapshot of keys and values, in key order) and pushes 1.
+The compiler makes three hidden locals, `" iterable"`, `" kind"` and `" position"`, in
+that order. `OP_ITER_NEXT2` (same forward jump offset) reads the kind, then pushes TWO
+values, which become `k` and `v` in the per-iteration scope: the index and the element
+for an array, the index and a 1-character string for a string, the key and the value
+for a flat snapshot (where the position advances by 2). `break`, `continue` and the exit
+work as before, because they only depend on the hidden locals' scope depth.
+
 **Tree-walker.** `visitForInStmt` evaluates the iterable once. An array is
 walked by index with `elements.size()` re-read each time; a map is copied into a
 temporary array of keys first. Each iteration builds a new `Environment` holding
