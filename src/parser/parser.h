@@ -38,7 +38,7 @@ private:
     StmtPtr whileStatement();   // "while" "(" expression ")" statement
     StmtPtr forStatement();     // "for" "(" (varDecl|exprStmt|";") expression? ";" expression? ")" statement -- desugars to a whileStmt
     StmtPtr returnStatement();  // "return" expression? ";"
-    StmtPtr tryStatement();     // "try" block "catch" "(" IDENTIFIER ")" block
+    StmtPtr tryStatement();     // "try" block "catch" "(" IDENTIFIER ( "," IDENTIFIER )? ")" block
     StmtPtr forInStatement();   // "var" IDENTIFIER "in" expression ")" statement -- the rest of "for (var x in xs) body" once the "(" is consumed
     StmtPtr breakStatement();   // "break" ";"     -- only inside a loop
     StmtPtr continueStatement(); // "continue" ";" -- only inside a loop

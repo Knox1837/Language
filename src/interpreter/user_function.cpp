@@ -4,6 +4,8 @@
 #include "interpreter.h"
 #include "return_exception.h"
 #include "lox_instance.h"
+#include "call_stack.h"
+#include "../util/trace.h"
 
 UserFunction::UserFunction(FunctionStmt* declaration, std::shared_ptr<Environment> closure, bool isInitializer)
     : declaration(declaration), closure(std::move(closure)), isInitializer(isInitializer) {}
@@ -20,6 +22,17 @@ std::shared_ptr<UserFunction> UserFunction::bind(std::shared_ptr<LoxInstance> in
 }
 
 Value UserFunction::call(Interpreter& interpreter, std::vector<Value>& arguments) {
+    // A frame for stack traces: popped when this call ends normally (or by `return`), left on the stack when a runtime error passes through (see call_stack.h).
+    CallFrameScope frame(traceFunctionLabel(declaration->name.lexeme));
+    try {
+        return run(interpreter, arguments);
+    } catch (const RuntimeError&) {
+        frame.keep();
+        throw;
+    }
+}
+
+Value UserFunction::run(Interpreter& interpreter, std::vector<Value>& arguments) {
     // New scope for this call, chained to the closure (where the function was DEFINED / bound), not the caller's environment.
     auto callEnv = std::make_shared<Environment>(closure);
 

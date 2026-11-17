@@ -1131,9 +1131,11 @@ void Compiler::emitHandlerPops(int downToTryDepth) {
 }
 
 void Compiler::tryStatement() {
-    // try { body } catch (e) { handler }
+    // try { body } catch (e) { handler }   or   try { body } catch (e, info) { handler }
     consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
     size_t tryJump = emitJump(OpCode::OP_TRY);
+    emitByte(0); // OP_TRY's flag byte: patched to 1 below if the catch turns out to have a second variable
+    size_t infoFlag = currentChunk().code.size() - 1;
     current_().tryDepth++;
     beginScope();
     block();
@@ -1150,15 +1152,25 @@ void Compiler::tryStatement() {
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
     consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
     Token name = previous();
+    Token infoName = name; // only meaningful when hasInfo
+    bool hasInfo = false;
+    if (match(TokenType::COMMA)) {
+        hasInfo = true;
+        consume(TokenType::IDENTIFIER, "Expect a second variable name for the error's line and trace.");
+        infoName = previous();
+        if (infoName.lexeme == name.lexeme) errorAt(infoName, "The two catch variables must have different names.");
+        currentChunk().code[infoFlag] = 1;
+    }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
     consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
 
     beginScope();
     current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the error value is already in its slot
+    if (hasInfo) current_().locals.push_back(LocalVar{infoName, current_().scopeDepth}); // the info map was pushed right after it
     beginScope();
     block();
     endScope();
-    endScope(); // pops the error value
+    endScope(); // pops the error value (and the info map)
 
     patchJump(endJump);
 }

@@ -173,11 +173,42 @@ void VM::raiseError(const VMValue& value) {
     errorPending = true;
 }
 
+// The call stack as it stands, innermost frame first: each frame's current line comes from its own instruction pointer, except the innermost, which is where the error was raised. Frame 0 is the main script; a frame running an imported file's top-level code is labelled with the file's name; every other frame is a function call.
+std::vector<TraceEntry> VM::currentTrace() const {
+    std::vector<TraceEntry> entries;
+    for (size_t i = frames.size(); i-- > 0;) {
+        const CallFrame& frame = frames[i];
+        int line = pendingLine;
+        if (i + 1 != frames.size()) {
+            const auto& lines = frame.closure->function->chunk.lines;
+            line = (frame.ip > 0 && frame.ip - 1 < lines.size()) ? lines[frame.ip - 1] : -1;
+        }
+        std::string where;
+        if (i == 0) where = "script";
+        else if (frame.importedModule) where = traceModuleLabel(frame.importedModule->path);
+        else where = traceFunctionLabel(frame.closure->function->name);
+        entries.push_back(TraceEntry{line, where});
+    }
+    return entries;
+}
+
+VMValue VM::makeErrorInfo() const {
+    auto info = std::make_shared<VMMap>();
+    info->entries.emplace(MapKey(std::string("line")), VMValue{static_cast<double>(pendingLine)});
+    auto lines = std::make_shared<VMArray>();
+    for (const std::string& line : formatTrace(currentTrace())) lines->elements.push_back(line);
+    info->entries.emplace(MapKey(std::string("trace")), VMValue{lines});
+    return VMValue{info};
+}
+
 // Delivers the pending error to the innermost handler, if this run() may use it. A handler belongs to frame (frameCount - 1); a run() that began with `baseFrames` frames on the stack is responsible for frames from index baseFrames up, so it may use a handler only if frameCount > baseFrames. A handler below that line belongs to an outer run(), which is waiting inside a native that called us: return false and let the error travel out through that native.
 bool VM::unwindToHandler(size_t baseFrames) {
     if (handlers.empty() || handlers.back().frameCount <= baseFrames) return false;
     TryHandler handler = handlers.back();
     handlers.pop_back();
+
+    VMValue info; // built BEFORE the frames the error passed through are popped below
+    if (handler.wantsInfo) info = makeErrorInfo();
 
     closeUpvalues(handler.stackHeight); // locals of the abandoned code that closures captured must be closed BEFORE their slots go
 
@@ -189,6 +220,7 @@ bool VM::unwindToHandler(size_t baseFrames) {
     stack.resize(handler.stackHeight);
 
     push(std::move(pendingValue)); // the caught value becomes the catch variable's slot
+    if (handler.wantsInfo) push(std::move(info)); // and the info map the second one's
     pendingValue = VMValue{};
     errorPending = false;
     currentFrame().ip = handler.catchIp;
@@ -198,6 +230,10 @@ bool VM::unwindToHandler(size_t baseFrames) {
 void VM::reportUncaughtError() {
     std::string text = isVMString(pendingValue) ? asVMString(pendingValue) : stringifyVMValue(pendingValue);
     std::cerr << "[line " << pendingLine << "] Runtime error: " << text << "\n";
+    // The trace is printed only when the error happened inside a function or an import (frame 0 is the script): for one at the top level it would only repeat the line above.
+    if (frames.size() > 1) {
+        for (const std::string& line : formatTrace(currentTrace())) std::cerr << "  " << line << "\n";
+    }
 
     // Abandon the whole program, so a subsequent REPL line (if any) starts clean rather than resuming mid-call; the same as the tree-walker's interpret() catching the error at the top level.
     pendingValue = VMValue{};
@@ -688,7 +724,9 @@ InterpretResult VM::runLoop(size_t baseFrames) {
             }
             case OpCode::OP_TRY: {
                 uint16_t offset = readShort();
-                handlers.push_back(TryHandler{frames.size(), stack.size(), currentFrame().ip + offset});
+                size_t catchIp = currentFrame().ip + offset; // computed BEFORE the flag byte is read: the jump offset counts from the end of its own two bytes
+                bool wantsInfo = readByte() != 0;
+                handlers.push_back(TryHandler{frames.size(), stack.size(), catchIp, wantsInfo});
                 break;
             }
             case OpCode::OP_POP_HANDLER: {

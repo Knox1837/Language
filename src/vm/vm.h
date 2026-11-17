@@ -11,6 +11,7 @@
 #include "vm_closure.h"
 #include "vm_upvalue.h"
 #include "vm_module.h"
+#include "../util/trace.h"
 
 enum class InterpretResult {
     OK,
@@ -74,10 +75,13 @@ private:
         size_t frameCount;  // frames.size() when the try began: the handler belongs to frame frameCount - 1
         size_t stackHeight; // stack.size() then: everything above it is discarded, and the error value is pushed in its place
         size_t catchIp;     // where the catch block starts, in the frame that ran the try
+        bool wantsInfo;     // the catch has a second variable: push the error's {"line", "trace"} map after the error value
     };
     std::vector<TryHandler> handlers; // innermost last. Entries die with their try body (OP_POP_HANDLER), with their frame (OP_RETURN) or when an error is caught
 
     bool unwindToHandler(size_t baseFrames); // delivers the pending error to the innermost handler this run() may use; false if there is none
+    std::vector<TraceEntry> currentTrace() const; // the call stack as it stands, innermost first; the innermost frame's line is the pending error's line
+    VMValue makeErrorInfo() const;                 // the map {"line": ..., "trace": [...]} handed to a two-variable catch
     void reportUncaughtError();              // prints the pending error and abandons the program, as runtimeError() always used to
 
     // True from the moment an error is raised until it is caught or reported. A native that called back into the VM and saw it fail returns false with no message of its own: the error is already pending, and raising a second one would replace it with an empty message.

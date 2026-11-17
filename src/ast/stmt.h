@@ -156,7 +156,8 @@ struct ContinueStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitContinueStmt(*this); }
 };
 
-// for (var name in iterable) body | for (var name, value in iterable) body (two var form)
+// for (var name in iterable) body
+// for (var name, value in iterable) body   -- the two-variable form: for a map `name` is the key and `value` the value, for an array `name` is the index and `value` the element, for a string `name` is the byte's index and `value` the 1-character string. A map's keys and values are both snapshotted before the loop starts.
 // The one-variable form runs `body` once per element of an array, once per KEY of a map (keys come out in the map's own sorted order), or once per BYTE of a string (as a 1-character string, like s[i]).
 // The iterable is evaluated once, before the loop. Each iteration gets a fresh scope holding its own copy of the loop variable, so a closure created in the body keeps that iteration's value. `break` and `continue` work as in any other loop.
 struct ForInStmt : Stmt {
@@ -175,8 +176,9 @@ struct ForInStmt : Stmt {
 struct TryStmt : Stmt {
     StmtPtr tryBody;
     Token name;        // the catch variable
+    std::optional<Token> infoName; // the optional second catch variable: a map {"line": ..., "trace": [...]} describing where the error was raised
     StmtPtr catchBody;
-    TryStmt(StmtPtr tryBody, Token name, StmtPtr catchBody)
-        : tryBody(std::move(tryBody)), name(std::move(name)), catchBody(std::move(catchBody)) {}
+    TryStmt(StmtPtr tryBody, Token name, std::optional<Token> infoName, StmtPtr catchBody)
+        : tryBody(std::move(tryBody)), name(std::move(name)), infoName(std::move(infoName)), catchBody(std::move(catchBody)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitTryStmt(*this); }
 };

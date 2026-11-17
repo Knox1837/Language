@@ -189,7 +189,7 @@ void ASTPrinter::visitTryStmt(TryStmt& stmt) {
     stmt.tryBody->accept(*this);
     out << "(try " << result;
     stmt.catchBody->accept(*this);
-    out << " catch " << stmt.name.lexeme << " " << result << ")";
+    out << " catch " << stmt.name.lexeme << (stmt.infoName ? " " + stmt.infoName->lexeme : "") << " " << result << ")";
     result = out.str();
 }
 

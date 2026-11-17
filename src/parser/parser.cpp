@@ -276,10 +276,15 @@ StmtPtr Parser::tryStatement() {
     consume(TokenType::CATCH, "Expect 'catch' after the try block.");
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
     Token name = consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
+    std::optional<Token> infoName;
+    if (match({TokenType::COMMA})) {
+        infoName = consume(TokenType::IDENTIFIER, "Expect a second variable name for the error's line and trace.");
+        if (infoName->lexeme == name.lexeme) error(*infoName, "The two catch variables must have different names.");
+    }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
     consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
     StmtPtr catchBody = std::make_unique<BlockStmt>(block());
-    return std::make_unique<TryStmt>(std::move(tryBody), std::move(name), std::move(catchBody));
+    return std::make_unique<TryStmt>(std::move(tryBody), std::move(name), std::move(infoName), std::move(catchBody));
 }
 
 StmtPtr Parser::returnStatement() {

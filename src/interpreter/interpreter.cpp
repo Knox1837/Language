@@ -11,6 +11,8 @@
 #include "map_methods.h"
 #include "module_loader.h"
 #include "module_object.h"
+#include "call_stack.h"
+#include "../util/trace.h"
 #include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
@@ -37,11 +39,29 @@ void Interpreter::run(const std::vector<StmtPtr>& statements) {
     }
 }
 
+// The stack as it stands when an error is raised on `errorLine`: innermost frame first, ending with the main script. Each frame's current line is the line of the call made from it, which the frame ABOVE it recorded.
+static std::vector<TraceEntry> currentTrace(int errorLine) {
+    const std::vector<CallInfo>& stack = callStack();
+    std::vector<TraceEntry> entries;
+    int line = errorLine;
+    for (size_t i = stack.size(); i-- > 0;) {
+        entries.push_back(TraceEntry{line, stack[i].where});
+        line = stack[i].callLine;
+    }
+    entries.push_back(TraceEntry{line, "script"});
+    return entries;
+}
+
 bool Interpreter::interpret(const std::vector<StmtPtr>& statements) {
     try {
         run(statements);
     } catch (const RuntimeError& error) {
         std::cerr << "[line " << error.token.line << "] Runtime error: " << error.what() << "\n";
+        // The trace is printed only when the error happened inside a function or an import: for one at the top level of the script it would only repeat the line above.
+        if (!callStack().empty()) {
+            for (const std::string& line : formatTrace(currentTrace(error.token.line))) std::cerr << "  " << line << "\n";
+        }
+        callStack().clear(); // nothing is running any more; a later REPL line starts clean
         return false;
     }
     return true;
@@ -243,11 +263,15 @@ void Interpreter::visitCallExpr(Call& expr) {
         throw RuntimeError(expr.paren, arityMessage(function->arity(), function->maxArity(), arguments.size()));
     }
 
+    CallLineScope callLine(expr.paren.line); // what a function entered by this call records as the line it was called from
     try {
         result = function->call(*this, arguments);
     } catch (const RuntimeError& error) {
-        // error(value) is a native with no source token, so it is raised with line 0; give it the line of THIS call. (Other natives keep their [line 0], as documented.)
-        if (error.thrown && error.token.line == 0) throw makeThrownError(expr.paren, *error.thrown);
+        // A native has no source token, so it raises its errors with line 0 (error(value) too); give the error the line of THIS call, which is what the VM reports.
+        if (error.token.line == 0) {
+            if (error.thrown) throw makeThrownError(expr.paren, *error.thrown);
+            throw RuntimeError(expr.paren, error.what());
+        }
         throw;
     }
 }
@@ -356,6 +380,7 @@ void Interpreter::visitContinueStmt(ContinueStmt&) {
 
 void Interpreter::visitTryStmt(TryStmt& stmt) {
     std::shared_ptr<Environment> savedEnvironment = environment;
+    const size_t stackDepth = callStack().size(); // the frames below this are still running when the handler does
     try {
         execute(*stmt.tryBody);
         return; // no error (a `return`, which travels as a ReturnException, and `break`/`continue`, which set loopSignal, pass straight through)
@@ -363,9 +388,22 @@ void Interpreter::visitTryStmt(TryStmt& stmt) {
         environment = savedEnvironment; // normally already restored by the blocks the error unwound through; be certain
         Value caught = error.thrown ? *error.thrown : Value{std::string(error.what())};
 
+        // The second catch variable, if there is one: {"line": where the error was raised, "trace": [...]}. Built now, while the frames the error passed through are still on the call stack; then they are cut away.
+        std::optional<Value> info;
+        if (stmt.infoName) {
+            auto map = std::make_shared<MapObject>();
+            map->entries.emplace(MapKey(std::string("line")), Value{static_cast<double>(error.token.line)});
+            auto lines = std::make_shared<ArrayObject>();
+            for (const std::string& line : formatTrace(currentTrace(error.token.line))) lines->elements.push_back(line);
+            map->entries.emplace(MapKey(std::string("trace")), Value{lines});
+            info = Value{map};
+        }
+        callStack().resize(stackDepth);
+
         // The handler runs in a scope holding just the caught value, with its block one level inside, like the VM's scopes.
         auto catchEnvironment = std::make_shared<Environment>(savedEnvironment);
         catchEnvironment->define(stmt.name.lexeme, caught);
+        if (info) catchEnvironment->define(stmt.infoName->lexeme, *info);
         environment = std::move(catchEnvironment);
         try {
             execute(*stmt.catchBody);

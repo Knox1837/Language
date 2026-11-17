@@ -13,6 +13,7 @@ public:
 
     int arity() const override;
     Value call(Interpreter& interpreter, std::vector<Value>& arguments) override;
+    Value run(Interpreter& interpreter, std::vector<Value>& arguments); // the body of call(), without the stack-trace bookkeeping
     std::string toString() const override;
 
     // Produces a copy of this function whose closure has `this` bound to the given instance
