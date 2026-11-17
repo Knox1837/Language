@@ -780,11 +780,8 @@ Exit codes: `0` normal end, `70` an uncaught runtime error (both engines), `65` 
 | `isFunction(x)` | any → bool | true for both user-defined functions AND classes (a class is callable — calling it constructs an instance) |
 | `type(x)` | any → string | `"number"`, `"string"`, `"bool"`, `"nil"`, `"array"`, `"map"`, `"function"`, `"instance"` or `"module"`. `"function"` covers everything `isFunction` accepts: functions, built-ins, classes and bound methods |
 
-Native functions raise the same `RuntimeError` mechanism as the rest of
-the interpreter, but since they aren't tied to a specific AST node, the
-tree-walking interpreter reports their errors at line `0` rather than the
-calling line (the VM reports the line of the call). The exception is
-`error(value)` and `assert`, which both engines report at the line of the call.
+An error raised by a built-in (`len(5)`, `sqrt("x")`, `assert(...)`, `error(...)`)
+is reported at the line of the call, in both engines.
 
 **VM-only functions:** `gc()` runs the garbage collector and returns how many
 objects it freed, and `heapSize()` returns how many heap objects exist. They
@@ -829,7 +826,8 @@ try {
   built-in raises (undefined variable, `10 / 0`, an array index out of range,
   `len(5)`, calling a non-function, ...) it is the message as a string, without
   the `[line N] Runtime error:` prefix: `Undefined variable 'x'.`,
-  `Division by zero.`. A caught language error does not carry its line number.
+  `Division by zero.`. The message has no line number; ask for it with the
+  second catch variable (below).
 - **Where it unwinds to.** The innermost enclosing `try` wins. Errors travel out
   through any number of function calls, method calls, constructors, imports and
   callbacks that `map`, `filter`, `reduce` and `sort` run; locals the abandoned
@@ -847,17 +845,74 @@ try {
 - **Uncaught.** An error that no `try` catches stops the program and prints
   `[line N] Runtime error: ` followed by the message, or by the printed form of
   the thrown value (`error([1, 2])` prints `[1, 2]`). `N` is the line where the
-  error was raised.
+  error was raised. If it was raised inside a function (or an imported file), a
+  stack trace follows, innermost call first; see "Line and stack trace" below.
 - **Not catchable:** syntax errors (the program never starts).
 - There is no `finally`.
+
+### Line and stack trace
+
+`catch (e, info) { ... }` gives the handler a second variable describing where
+the error was raised. It is a map with two entries:
+
+- `info["line"]`: the line the error was raised on (for `error(value)` and for
+  errors from built-ins, the line of the call).
+- `info["trace"]`: an array of strings, innermost frame first, one per function
+  call still running when the error was raised, ending with `script`.
+
+```
+def inner(x) { return len(x); }
+def outer(x) { return inner(x); }
+
+try {
+    outer(5);
+} catch (e, info) {
+    print e;                      // Expected a string argument.
+    print info["line"];           // 1
+    for (var entry in info["trace"]) print entry;
+    // [line 1] in inner()
+    // [line 2] in outer()
+    // [line 5] in script
+}
+```
+
+- Each entry reads `[line N] in WHERE`, where `N` is the line that frame was
+  executing and `WHERE` is `name()` for a function or method (a constructor is
+  `init()`), `<fn>` for an anonymous function, `module file.mylang` for the
+  top-level code of an imported file, and `script` for the main file. A
+  built-in that calls back into your code (`map`, `sort`, ...) is not a frame of
+  its own: the callback's frame sits directly above the one that called the
+  built-in.
+- The trace is the whole stack when the error was raised, including the
+  functions *above* the `try` that caught it.
+- A trace of more than 21 frames (deep recursion) keeps the innermost 10 and the
+  outermost 10, with one entry `... N more frames ...` between them.
+- The two names must differ (`The two catch variables must have different
+  names.`). `catch (e)` works as before and costs nothing extra.
+- A trace names no files: a line number belongs to the file of the frame it is
+  in, which is the one named by the nearest `module ...` entry below it (or the
+  main script).
+
+An **uncaught** error prints the same entries after its first line, indented, but
+only when it was raised inside a function or an imported file (at the top level
+of the script the first line already says everything):
+
+```
+[line 3] Runtime error: uncaught
+  [line 3] in c()
+  [line 2] in b()
+  [line 1] in a()
+  [line 4] in script
+```
 
 ## Not yet implemented
 
 Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
-- **`finally`, and details of a caught error:** there is no `finally` block, and
-  a caught language error is only its message string (no line number, no kind).
+- **`finally`, and the kind of a caught error:** there is no `finally` block, and
+  a caught language error is only its message string (its line and trace are in
+  the second catch variable, but there is no error type to test).
 - **Beyond whole-file I/O:** no reading a file a piece at a time, no binary
   mode or seeking, no folders (listing, creating, deleting), no renaming or
   copying. `readFile` holds the whole file in memory.

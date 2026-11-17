@@ -409,8 +409,9 @@ signature `bool(args, result, error)`: on success it writes the return
 value to `result` and returns true; on failure it fills `error` and
 returns false. Natives do not throw and do not know the current line —
 `VM::callValue` turns a failure into `runtimeError(error)`, which
-attaches the line of the CALL. (The tree-walker prints `[line 0]` for
-errors raised inside natives; the VM reports the real line.)
+attaches the line of the CALL. (The tree-walker used to print `[line 0]`
+for errors raised inside natives; it now re-raises them with the line of the
+call too, so the engines agree.)
 
 Calling a native uses no `CallFrame`: `callValue` checks the arity
 (same "Expected N arguments but got M." message as for user functions),
@@ -1131,7 +1132,7 @@ restoring again if the handler itself throws. Nothing else needed to change: the
 blocks the error unwinds through already restore their scope, and the module
 loader already forgets a half-loaded file. `error` is a native with no source
 token, so it throws at line 0 and `visitCallExpr` re-raises it with the line of
-the call (other natives keep their `[line 0]`).
+the call (so does every other native's error, since the stack-trace work).
 
 **VM: raising and delivering are separate.** Before, `runtimeError` printed and
 wiped the stack on the spot. Now it only records the error (`pendingValue`,
@@ -1451,9 +1452,6 @@ the tests compare them line by line. What still differs:
   returns no function. The tree-walker prints the same message and runs the
   rest of the file anyway, as it does for any syntax error. (Before this, the
   VM ran programs that only had a stray character, such as `print 1;@`.)
-- **Line numbers for errors raised inside natives:** the VM reports the
-  line of the call; the tree-walker prints `[line 0]`. The one exception is
-  `error(value)`, which the tree-walker also reports at the line of the call.
 - **A failed `class A < x {}` in the REPL** leaves `A` defined as an
   empty class in the VM (the class is defined before the superclass is
   checked); the tree-walker leaves it undefined.
@@ -1482,3 +1480,46 @@ the tests compare them line by line. What still differs:
 The two engines are completely independent. The VM now covers the whole
 language, including imports; the only differences are the ones listed
 under "Known differences from the tree-walker".
+
+## Design note: line and stack trace of an error
+
+`catch (e, info)` and the trace printed after an uncaught error (see "Line and
+stack trace" in `language_spec.md`) are built from the same list of entries,
+`TraceEntry {line, where}` innermost first, and formatted by one function,
+`formatTrace` in `src/util/trace.h`, so the two engines cannot drift apart
+(including the shortening of a long trace). The frame labels (`name()`, `<fn>`,
+`module file`, `script`) come from the same header.
+
+**VM.** Nothing new is recorded while the program runs. A frame's current line
+is read from its own instruction pointer (`chunk.lines[ip - 1]`), except the
+innermost frame, whose line is `pendingLine`, where the error was raised.
+`runtimeError` only records an error and leaves the frames alone, so at the two
+places that decide what happens to it the whole stack is still there:
+`unwindToHandler` builds the info map BEFORE it pops the frames, and
+`reportUncaughtError` prints the trace before it clears them. Frame 0 is the
+script, a frame with `importedModule` set is an import, anything else is a
+function call (natives have no frame). `OP_TRY` gained a flag byte after its
+jump offset, 1 when the catch has a second variable, so `unwindToHandler` builds
+the map only when it will be used; the compiler writes the flag after it has
+parsed the catch clause (the clause comes after the try body, which is already
+compiled). The VM reads the offset and works out the catch address before it
+reads the flag byte, because the offset counts from the end of its own two
+bytes and the flag byte lies inside what it jumps over.
+
+**Tree-walker.** C++ unwinding would normally throw the frames away, so the
+interpreter keeps its own stack (`src/interpreter/call_stack.h`): one process-wide
+vector of `{label, callLine}`, shared by the main interpreter and the ones that
+run imported files. `UserFunction::call` pushes a frame (`CallFrameScope`) and
+pops it when the call ends normally or by `return`; when a `RuntimeError` passes
+through, it calls `keep()` and the frame stays. Whoever finally handles the error
+reads the whole stack (`currentTrace`) and then cuts it back: `visitTryStmt` to
+the depth the `try` started at, `interpret` to empty. `callLine`, the line of the
+call that made a frame, is the line of the call expression being dispatched
+(`currentCallLine`, set around each call in `visitCallExpr` and restored after),
+which also covers a callback that a native such as `sort` calls, since the
+native's own call expression is still the current one. A frame's current line is
+the `callLine` its callee recorded, so the list is built from the top down.
+`ModuleLoader::load` pushes a frame for the imported file's top-level code, with
+the line of the `import`. `visitCallExpr` now re-raises EVERY error that arrives
+with line 0 (a native's) at the line of the call, not just `error(value)`, which
+is what removed the old `[line 0]` difference between the engines.
