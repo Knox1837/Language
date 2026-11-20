@@ -138,7 +138,9 @@ struct ClassStmt : Stmt {
 struct ImportStmt : Stmt {
     Token path;  // the STRING token holding the file path, as written in source
     Token alias; // the IDENTIFIER after "as" - what the module is bound to locally
-    ImportStmt(Token path, Token alias) : path(std::move(path)), alias(std::move(alias)) {}
+    std::string sourceDir; // the directory of the file this statement is written in; the path resolves against it. Empty for the main script (the loader's own base directory is used)
+    ImportStmt(Token path, Token alias, std::string sourceDir = "")
+        : path(std::move(path)), alias(std::move(alias)), sourceDir(std::move(sourceDir)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitImportStmt(*this); }
 };
 

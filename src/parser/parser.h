@@ -13,13 +13,15 @@ struct ParseError : std::runtime_error {
 
 class Parser {
 public:
-    explicit Parser(std::vector<Token> tokens);
+    // sourceDir: the directory of the file being parsed, stamped on every import statement so its path resolves against that file (empty: the main script, resolved against the loader's base directory).
+    explicit Parser(std::vector<Token> tokens, std::string sourceDir = "");
 
     // Entry point: parses the whole token stream into a list of top-level statements.
     std::vector<StmtPtr> parse();
 
 private:
     std::vector<Token> tokens;
+    std::string sourceDir;
     int current = 0;
     int loopDepth = 0; // how many loop BODIES enclose the current position inside the current function; 0 means `break`/`continue` are not allowed here
 

@@ -526,7 +526,7 @@ void Interpreter::visitImportStmt(ImportStmt& stmt) {
     if (!moduleLoader) {
         throw RuntimeError(stmt.path, "Imports are not available in this context (no base directory set).");
     }
-    Value moduleValue = moduleLoader->load(stmt.path.lexeme, stmt.path, *this);
+    Value moduleValue = moduleLoader->load(stmt.path.lexeme, stmt.path, *this, stmt.sourceDir);
     environment->define(stmt.alias.lexeme, moduleValue);
 }
 

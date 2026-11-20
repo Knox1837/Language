@@ -61,7 +61,7 @@ private:
     bool hasModuleBaseDir = false;
     std::unordered_map<std::string, std::shared_ptr<VMModule>> moduleCache; // resolved path -> module, filled when a file finishes loading
     std::unordered_set<std::string> currentlyLoading;                        // resolved paths whose top-level code is running now (circular-import detection)
-    std::string resolveModulePath(const std::string& path) const;
+    std::string resolveModulePath(const std::string& path, const VMModule* importer) const;
 
     // The globals table of the code that is running right now: the module its closure was created in.
     std::unordered_map<std::string, VMValue>& currentGlobals() { return currentFrame().closure->module->globals; }

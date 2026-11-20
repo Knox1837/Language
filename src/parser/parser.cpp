@@ -35,7 +35,7 @@
 #include <iostream>
 #include <unordered_map>
 
-Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)) {}
+Parser::Parser(std::vector<Token> tokens, std::string sourceDir) : tokens(std::move(tokens)), sourceDir(std::move(sourceDir)) {}
 
 namespace {
 // Sets a counter for the lifetime of one scope and puts the old value back on the way out, including when a ParseError unwinds through it. Without this, an error in a loop body would leave the loop depth raised and a later `break` outside any loop would be wrongly accepted.
@@ -75,7 +75,7 @@ StmtPtr Parser::importDeclaration() {
     consume(TokenType::AS, "Expect 'as' after import path.");
     Token alias = consume(TokenType::IDENTIFIER, "Expect a name after 'as'.");
     consume(TokenType::SEMICOLON, "Expect ';' after import statement.");
-    return std::make_unique<ImportStmt>(std::move(path), std::move(alias));
+    return std::make_unique<ImportStmt>(std::move(path), std::move(alias), sourceDir);
 }
 
 StmtPtr Parser::classDeclaration() {
@@ -197,7 +197,8 @@ StmtPtr Parser::forStatement() {
     // "for (init; cond; incr) body" into: { init; while (cond) { body; incr; }}
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
 
-    // "for (var x in xs)"- told apart from the three-clause form by looking two tokens past "var". "for (x in xs)" (the "var" forgotten) is routed here too, so it gets one clear message instead of a cascade. "for (var k, v in m)": a comma right after the name can only be the two-variable form.
+    // "for (var x in xs)"- told apart from the three-clause form by looking two tokens past "var". "for (x in xs)" (the "var" forgotten) is routed here too, so it gets one clear message instead of a cascade.
+    // "for (var k, v in m)": a comma right after the name can only be the two-variable form.
     if ((check(TokenType::VAR) && checkAhead(1, TokenType::IDENTIFIER) && (checkAhead(2, TokenType::IN) || checkAhead(2, TokenType::COMMA))) ||
         (check(TokenType::IDENTIFIER) && (checkAhead(1, TokenType::IN) || (checkAhead(1, TokenType::COMMA) && checkAhead(2, TokenType::IDENTIFIER) && checkAhead(3, TokenType::IN))))) {
         return forInStatement();

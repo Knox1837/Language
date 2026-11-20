@@ -14,10 +14,10 @@
 
 ModuleLoader::ModuleLoader(std::string baseDir) : baseDir(std::move(baseDir)) {}
 
-std::string ModuleLoader::resolvePath(const std::string& path) const {
+std::string ModuleLoader::resolvePath(const std::string& path, const std::string& fromDir) const {
     namespace fs = std::filesystem;
     fs::path p(path);
-    fs::path resolved = p.is_absolute() ? p : fs::path(baseDir) / p;
+    fs::path resolved = p.is_absolute() ? p : fs::path(fromDir.empty() ? baseDir : fromDir) / p;
 
     // weakly_canonical normalizes ".."/"." segments without requiring the file to already exist (plain canonical() would throw if it doesn't) this keeps cache keys consistent even before we've confirmed the file is actually readable.
     std::error_code ec;
@@ -25,8 +25,8 @@ std::string ModuleLoader::resolvePath(const std::string& path) const {
     return ec ? resolved.string() : canonical.string();
 }
 
-Value ModuleLoader::load(const std::string& path, const Token& importToken, Interpreter& /*hostInterpreter*/) {
-    std::string resolved = resolvePath(path);
+Value ModuleLoader::load(const std::string& path, const Token& importToken, Interpreter& /*hostInterpreter*/, const std::string& fromDir) {
+    std::string resolved = resolvePath(path, fromDir);
 
     auto cached = cache.find(resolved);
     if (cached != cache.end()) {
@@ -49,7 +49,8 @@ Value ModuleLoader::load(const std::string& path, const Token& importToken, Inte
     Lexer lexer(buffer.str());
     std::vector<Token> tokens = lexer.scanTokens();
 
-    Parser parser(tokens);
+    // Imports written in this file resolve against this file's own directory.
+    Parser parser(tokens, std::filesystem::path(resolved).parent_path().string());
     moduleStatements.push_back(parser.parse());
     // moduleStatements.back() is a vector of StmtPtr, which are smart pointers to the AST nodes. We keep this vector alive for the lifetime of the program to ensure that any functions or closures defined in the imported module can still reference their AST nodes.
     Interpreter moduleInterpreter;
