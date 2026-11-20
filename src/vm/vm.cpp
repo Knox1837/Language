@@ -51,11 +51,12 @@ void VM::setModuleBaseDir(const std::string& dir) {
     hasModuleBaseDir = true;
 }
 
-// Same rule as the tree-walker's ModuleLoader: relative paths resolve against the base directory, and weakly_canonical normalizes "." and ".." so the cache key is the same however the path was written.
-std::string VM::resolveModulePath(const std::string& path) const {
+// Same rule as the tree-walker's ModuleLoader: a relative path resolves against the directory of the file the import is written in (the main script's directory for the main script, whose module has no path), and weakly_canonical normalizes "." and ".." so the cache key is the same however the path was written.
+std::string VM::resolveModulePath(const std::string& path, const VMModule* importer) const {
     namespace fs = std::filesystem;
     fs::path p(path);
-    fs::path resolved = p.is_absolute() ? p : fs::path(moduleBaseDir) / p;
+    fs::path fromDir = (importer && !importer->path.empty()) ? fs::path(importer->path).parent_path() : fs::path(moduleBaseDir);
+    fs::path resolved = p.is_absolute() ? p : fromDir / p;
     std::error_code ec;
     fs::path canonical = fs::weakly_canonical(resolved, ec);
     return ec ? resolved.string() : canonical.string();
@@ -899,7 +900,7 @@ InterpretResult VM::runLoop(size_t baseFrames) {
                     runtimeError("Imports are not available in this context (no base directory set).");
                     return InterpretResult::RUNTIME_ERROR;
                 }
-                std::string resolved = resolveModulePath(path);
+                std::string resolved = resolveModulePath(path, currentFrame().closure->module); // the module the running code belongs to, which stays right even inside a function called from another file
 
                 auto cached = moduleCache.find(resolved);
                 if (cached != moduleCache.end()) {

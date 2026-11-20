@@ -1332,10 +1332,19 @@ calls `run()` recursively, so a long chain of imports does not use C++
 stack (a chain of 300 files was tested).
 
 **Resolution, caching, cycles:**
-- A relative path resolves against the top-level script's directory (the
-  current directory in the REPL), including for `import` statements
-  inside an imported file; `main.cpp` passes the directory through
-  `VM::setModuleBaseDir()`. `weakly_canonical` normalizes `.` and `..`,
+- A relative path resolves against the directory of the file the `import`
+  is written in: the top-level script's directory (the current directory in
+  the REPL) for the main file, passed in by `main.cpp` through
+  `VM::setModuleBaseDir()`, or the folder of the imported file, taken from
+  the `path` of the `VMModule` the running closure belongs to
+  (`currentFrame().closure->module`). Going through the closure's module,
+  not the module "being loaded", keeps this right for an `import` inside a
+  function that another file calls. The tree-walker gets the same answer
+  differently: the parser is given the file's directory and stamps it on
+  every `ImportStmt` (`sourceDir`; empty for the main script, which uses the
+  loader's base directory), because a module's functions run in the CALLER's
+  interpreter and so cannot ask "which file am I in" at run time.
+  `weakly_canonical` normalizes `.` and `..`,
   so `"lib.mylang"`, `"./lib.mylang"` and `"sub/../lib.mylang"` are one
   cache entry. Without a base directory `import` is a runtime error, as
   in the tree-walker.

@@ -603,15 +603,21 @@ print math.PI_APPROX;      // 3.14
   file) and the whole program stops, exactly as if it had happened in
   the importing script. A file that fails part-way is not cached, so
   importing it again (for example on a later REPL line) runs it again.
-- **Path resolution (first-pass design)**: relative import paths always
-  resolve against the **top-level script's** directory — including
-  `import` statements written inside an already-imported file. This is
-  simpler than per-file relative resolution (how Node/Python do it) and
-  correct for the common case of a project's `.mylang` files living in
-  one flat directory. Per-file-relative resolution is a reasonable
-  future expansion, not yet implemented.
+- **Path resolution**: a relative import path resolves against the
+  directory of the **file the `import` is written in**. In the main script
+  that is the script's own folder (not the folder the program was started
+  from); in an imported file it is that file's folder, so a library can
+  import its neighbours with `import "helper.mylang" as helper;` or reach
+  up with `"../shared.mylang"` wherever the project is used from. This
+  holds for an `import` inside a function too, even when the function is
+  called from another file. `.` and `..` segments are normalized, so
+  different spellings of one path are one cache entry (and one module).
+  An absolute path is used as it is.
 - In the REPL (no script file), imports resolve relative to the current
   working directory.
+- Before this rule, every import, including those written in imported files,
+  resolved against the main script's folder; a project that relied on that
+  must now write its paths relative to the file they are in.
 
 ## Standard library
 
@@ -918,8 +924,6 @@ a parse error, or "Undefined variable" for the names that are not keywords.
   copying. `readFile` holds the whole file in memory.
 - **Map keys that are `nil`, arrays, maps, functions or instances.** Only strings,
   numbers and booleans can be keys.
-- **Per-file-relative import path resolution** (currently all imports resolve
-  against the top-level script's directory — see Imports section above).
 - **Operators and syntax:** no prefix `++x` and no `x++` inside an expression
   (only as a statement).
 - **Number formatting:** `print` shows whole numbers as integers and any other
