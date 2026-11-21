@@ -858,9 +858,10 @@ try {
 
 ### Line and stack trace
 
-`catch (e, info) { ... }` gives the handler a second variable describing where
-the error was raised. It is a map with two entries:
+`catch (e, info) { ... }` gives the handler a second variable describing the
+error. It is a map with three entries:
 
+- `info["kind"]`: what sort of error it is, a string (see "Error kinds" below).
 - `info["line"]`: the line the error was raised on (for `error(value)` and for
   errors from built-ins, the line of the call).
 - `info["trace"]`: an array of strings, innermost frame first, one per function
@@ -899,6 +900,31 @@ try {
   in, which is the one named by the nearest `module ...` entry below it (or the
   main script).
 
+### Error kinds
+
+`info["kind"]` lets a handler tell errors apart without comparing message text:
+
+| Kind | What went wrong | Examples |
+|---|---|---|
+| `"type"` | a value of the wrong type | `1 + "a"`, `-"a"`, `len(5)`, calling a number, `[1]["a"]`, `for (var x in 42)`, `nil[0]`, `s[0] = "x"` on a string |
+| `"value"` | the right type, but a value the operation can't accept | `1 / 0`, `1 % 0`, `sqrt(-1)`, `randomInt(5, 1)`, `split(s, "")`, `replace(s, "", x)`, a NaN map key |
+| `"range"` | a position that does not exist | `[1, 2][5]`, `"abc"[9]`, `pop([])`, `exit(3000000000)` |
+| `"key"` | a map key that is not there | `{"a": 1}["b"]` |
+| `"name"` | a name that is not defined | an undefined variable, property or method |
+| `"arity"` | the wrong number of arguments | `len()`, calling a two-parameter function with one argument |
+| `"io"` | a file could not be read, written or deleted | `readFile("missing.txt")`, writing into a missing folder |
+| `"import"` | an import failed | a file that cannot be opened or compiled, a circular import |
+| `"user"` | raised by `error(value)` or `assert`, with any value | `error("boom")`, `error(42)`, `assert(false)` |
+| `"other"` | anything else (internal errors) | |
+
+- A `"user"` error stays `"user"` whatever its message says: `error("Division by
+  zero.")` is not a `"value"` error. A handler that catches a language error and
+  rethrows its message with `error(e)` makes it a `"user"` error.
+- The kind is worked out from the beginning of the error's message, by one
+  table shared by both engines (`src/util/error_kind.h`), so a message has the
+  same kind in either. The messages themselves are not part of this promise,
+  but their kinds are.
+
 An **uncaught** error prints the same entries after its first line, indented, but
 only when it was raised inside a function or an imported file (at the top level
 of the script the first line already says everything):
@@ -917,8 +943,9 @@ Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
 - **`finally`, and the kind of a caught error:** there is no `finally` block, and
-  a caught language error is only its message string (its line and trace are in
-  the second catch variable, but there is no error type to test).
+  a caught language error is only its message string (its kind, line and trace
+  are in the second catch variable; there are no error classes you can name in
+  the `catch`).
 - **Beyond whole-file I/O:** no reading a file a piece at a time, no binary
   mode or seeking, no folders (listing, creating, deleting), no renaming or
   copying. `readFile` holds the whole file in memory.

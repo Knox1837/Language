@@ -1532,3 +1532,23 @@ the `callLine` its callee recorded, so the list is built from the top down.
 the line of the `import`. `visitCallExpr` now re-raises EVERY error that arrives
 with line 0 (a native's) at the line of the call, not just `error(value)`, which
 is what removed the old `[line 0]` difference between the engines.
+
+## Design note: error kinds
+
+`info["kind"]` (see "Error kinds" in `language_spec.md`) is a string chosen by
+one function, `classifyError(message)` in `src/util/error_kind.h`, shared by both
+engines. It looks only at the START of the message, through a table of prefixes
+(an `Expected ` followed by a digit is `arity`, `Expected a...` is `type`, and so
+on); the unknown is `"other"`. Errors raised by `error(value)` and `assert` are
+never classified: both engines remember that the value was thrown (the
+tree-walker's `RuntimeError::thrown`, the VM's `pendingUser`, set by `raiseError`
+and cleared by `runtimeError`) and report `"user"`.
+
+The alternative is to tag every error where it is raised, which is more exact
+but means about 160 call sites in the two engines (92 in the tree-walker, 68 in
+the VM), each of which could then give the two engines different kinds. A table
+is one place to read and one place to keep in step. Its weakness is that a NEW
+message with an unfamiliar start comes out as `"other"` until someone adds it,
+which `test_error_kinds` is there to notice. When adding an error message, add
+its beginning to the table. The classifier also never runs unless a handler
+asked for the info map, so ordinary errors and `catch (e)` pay nothing.
