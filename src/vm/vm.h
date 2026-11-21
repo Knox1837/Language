@@ -88,6 +88,7 @@ private:
     bool errorPending = false;
     VMValue pendingValue; // what was thrown: a message string for a language error, any value for error(value)
     int pendingLine = -1; // the source line the error was raised on, for the message of an uncaught one
+    bool pendingUser = false; // raised by error(value) or assert, not by the language itself: its kind is "user"
     int currentLine() const;
 
     CallFrame& currentFrame() { return frames.back(); }

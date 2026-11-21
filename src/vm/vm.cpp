@@ -2,6 +2,7 @@
 #include "vm.h"
 #include "compiler.h"
 #include "gc.h"
+#include "../util/error_kind.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
 #include "vm_class.h"
@@ -163,12 +164,14 @@ int VM::currentLine() const {
 
 // Raises a runtime error: records it and returns. Nothing is printed and nothing is unwound here; every caller goes on to leave runLoop() with RUNTIME_ERROR, and run() then decides, with the whole picture, whether a `try` catches it or it is printed.
 void VM::runtimeError(const std::string& message) {
+    pendingUser = false;
     pendingValue = VMValue{message};
     pendingLine = currentLine();
     errorPending = true;
 }
 
 void VM::raiseError(const VMValue& value) {
+    pendingUser = true;
     pendingValue = value;
     pendingLine = currentLine();
     errorPending = true;
@@ -195,6 +198,8 @@ std::vector<TraceEntry> VM::currentTrace() const {
 
 VMValue VM::makeErrorInfo() const {
     auto info = std::make_shared<VMMap>();
+    // A language error's value is its message string, which says what kind it is; a thrown value is "user" whatever it is.
+    info->entries.emplace(MapKey(std::string("kind")), VMValue{pendingUser ? std::string("user") : classifyError(asVMString(pendingValue))});
     info->entries.emplace(MapKey(std::string("line")), VMValue{static_cast<double>(pendingLine)});
     auto lines = std::make_shared<VMArray>();
     for (const std::string& line : formatTrace(currentTrace())) lines->elements.push_back(line);

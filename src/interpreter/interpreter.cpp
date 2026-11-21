@@ -13,6 +13,7 @@
 #include "module_object.h"
 #include "call_stack.h"
 #include "../util/trace.h"
+#include "../util/error_kind.h"
 #include "../stdlib/stdlib.h"
 #include <iostream>
 #include <cmath>
@@ -388,10 +389,11 @@ void Interpreter::visitTryStmt(TryStmt& stmt) {
         environment = savedEnvironment; // normally already restored by the blocks the error unwound through; be certain
         Value caught = error.thrown ? *error.thrown : Value{std::string(error.what())};
 
-        // The second catch variable, if there is one: {"line": where the error was raised, "trace": [...]}. Built now, while the frames the error passed through are still on the call stack; then they are cut away.
+        // The second catch variable, if there is one: {"kind": what sort of error, "line": where it was raised, "trace": [...]}. Built now, while the frames the error passed through are still on the call stack; then they are cut away.
         std::optional<Value> info;
         if (stmt.infoName) {
             auto map = std::make_shared<MapObject>();
+            map->entries.emplace(MapKey(std::string("kind")), Value{error.thrown ? std::string("user") : classifyError(error.what())});
             map->entries.emplace(MapKey(std::string("line")), Value{static_cast<double>(error.token.line)});
             auto lines = std::make_shared<ArrayObject>();
             for (const std::string& line : formatTrace(currentTrace(error.token.line))) lines->elements.push_back(line);
