@@ -1552,3 +1552,53 @@ message with an unfamiliar start comes out as `"other"` until someone adds it,
 which `test_error_kinds` is there to notice. When adding an error message, add
 its beginning to the table. The classifier also never runs unless a handler
 asked for the info map, so ordinary errors and `catch (e)` pay nothing.
+
+## Design note: finally
+
+`try { } catch (e) { } finally { }` has four ways to end (normally, by an error, by
+`return`, by `break`/`continue`) and the `finally` block must run after each, then
+let the original ending carry on. The two engines do it very differently.
+
+**Tree-walker.** C++ already has the four endings: normal completion, a
+`RuntimeError`, a `ReturnException` and the `loopSignal` flag. `visitTryStmt` runs
+`runTryCatch` (the old body) and captures whichever happened: the error (with the
+call-stack frames it passed through, saved and put back so its trace survives), the
+return, or the flag, which is set aside so it cannot stop the finally block's own
+statements. It then runs the finally block, and if that block ended normally
+re-raises the saved ending. An error, `return` or `break` inside the finally
+block simply escapes first, which is the "a finally can override" rule for free.
+
+**VM.** The finally block is compiled ONCE, as a subroutine after the try and
+catch code, entered with `OP_CALL_FINALLY` (push the return address as a number,
+jump) and left with `OP_END_FINALLY` (pop it, jump back), like the JVM's old
+`jsr`/`ret`. Every way out of the try calls it: falling off the end, and each
+`break`, `continue` and `return` (via `Compiler::emitExit`, which for each try it
+leaves discards that try's body locals, unregisters its handlers and emits the
+call, innermost first, before the usual cleanup). Because the finally code runs
+with the stack at one fixed height at every call site, its locals have ordinary
+fixed slots, and a `finally` body never needs compiling twice. A try that has a
+finally gets a scope of its own with three hidden locals, `" retval"`, `" error"`
+and `" errinfo"`, declared before anything else:
+
+- `return` parks its value in `" retval"` (the value is on top of the stack, where
+  the cleanup would pop it); with two nested tries the value is handed from the
+  inner one's slot to the outer one's after each finally.
+- The catch-all handler (`OP_TRY` flag 2) is registered first, so it is the OUTER
+  handler: a `catch` inside it gets the first chance, and an error from the catch
+  body reaches it. When it catches an error, `unwindToHandler` builds the usual info
+  map before popping frames and stores the error value and the map in the two hidden
+  slots just below the handler's recorded stack height (no push), and execution
+  continues at the finally call. After the block, `OP_RETHROW` reads the two slots
+  and raises the error again: its message (so its kind), its line, its trace
+  (`hasPendingTrace` makes `makeErrorInfo` and `reportUncaughtError` use the saved
+  lines, since the frames are gone by now).
+- `tryDepth` now counts every registered handler, the catch-all included, so a
+  `break` pops exactly the handlers it leaves.
+
+Code is only emitted differently for a `try` that has a `finally`. Since `break` and
+`return` inside the try body are compiled before the compiler reaches the `catch` or
+`finally` (it is single-pass over tokens), `scanTryShape` skips the try block's braces
+first to see what follows. A `return` inside the finally block does not run the same
+finally again: the entry is removed from `FunctionState::finallies` before the block is
+compiled. A `break`, `return` or error inside the block abandons the return address
+and the hidden slots, which are just locals the function's end discards.

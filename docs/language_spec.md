@@ -49,7 +49,7 @@ class     this      super     import    as        break     continue
 in        try       catch
 ```
 
-`in`, `try` and `catch` are reserved, so they can no longer be used as variable
+`in`, `try`, `catch` and `finally` are reserved, so they can no longer be used as variable
 or function names.
 
 ## Data types
@@ -172,7 +172,7 @@ incrementClause -> expression | target ( "++" | "--" )
 returnStmt  -> "return" expression? ";"
 breakStmt   -> "break" ";"
 continueStmt -> "continue" ";"
-tryStmt     -> "try" block "catch" "(" IDENTIFIER ")" block
+tryStmt     -> "try" block ( "catch" "(" IDENTIFIER ( "," IDENTIFIER )? ")" block )? ( "finally" block )?   (at least one of catch and finally)
 block       -> "{" declaration* "}"
 exprStmt    -> expression ";"
              | target ( "++" | "--" ) ";"       (target: IDENTIFIER, call "." IDENTIFIER or call "[" expression "]")
@@ -854,7 +854,61 @@ try {
   error was raised. If it was raised inside a function (or an imported file), a
   stack trace follows, innermost call first; see "Line and stack trace" below.
 - **Not catchable:** syntax errors (the program never starts).
-- There is no `finally`.
+- **`finally`** (below) runs cleanup code however the `try` ends.
+
+### Finally
+
+```
+try {
+    // ...
+} catch (e) {
+    // ...
+} finally {
+    // runs last, whatever happened above
+}
+```
+
+`finally` may follow a `catch`, or replace it: `try { ... } finally { ... }`
+has no catch, so an error still travels outward, after the `finally` block has
+run. A `try` needs at least one of the two.
+
+- **It always runs**, after the `try` block (and the `catch` block, if it ran),
+  however they ended: normally, by an error, or by `return`, `break` or
+  `continue`.
+- **Order.** An error in the `try` goes to the `catch` first, then the `finally`
+  runs. An error in the `catch` block runs the `finally` and then travels on.
+- **What happens next is whatever was happening.** After the `finally` block, a
+  pending error is raised again with its original line, kind and stack trace (a
+  `catch (e, info)` further out sees them as if the `finally` had not been
+  there), a pending `return` returns, and a pending `break` or `continue` does
+  its job. A `return` value is worked out *before* the `finally` runs, so the
+  block cannot change it, though it can change variables the value came from.
+- **A `finally` can override.** An error, a `return`, a `break` or a `continue`
+  inside a `finally` block replaces whatever was pending: `return` in a
+  `finally` swallows an error, and an error in a `finally` replaces the
+  original one. This is rarely what you want; it is also how Java and
+  JavaScript behave.
+- **Several levels.** With `try` blocks nested, a `return` or `break` runs each
+  `finally` it leaves, innermost first. A loop *inside* a `try` can `break`
+  without running that `try`'s `finally`.
+- **Scope.** The `finally` block is its own scope: it cannot see variables
+  declared in the `try` or `catch` block.
+- `finally` is a reserved word.
+
+```
+def readConfig(path) {
+    var text = nil;
+    try {
+        text = readFile(path);
+        return toNumber(text);
+    } catch (e) {
+        print "could not use " + path + ": " + e;
+        return nil;
+    } finally {
+        print "done with " + path;
+    }
+}
+```
 
 ### Line and stack trace
 
@@ -942,10 +996,9 @@ of the script the first line already says everything):
 Each of these was checked against both engines. A script that uses one gets
 a parse error, or "Undefined variable" for the names that are not keywords.
 
-- **`finally`, and the kind of a caught error:** there is no `finally` block, and
-  a caught language error is only its message string (its kind, line and trace
-  are in the second catch variable; there are no error classes you can name in
-  the `catch`).
+- **Error classes:** a caught language error is only its message string (its
+  kind, line and trace are in the second catch variable; there are no error
+  classes you can name in the `catch`).
 - **Beyond whole-file I/O:** no reading a file a piece at a time, no binary
   mode or seeking, no folders (listing, creating, deleting), no renaming or
   copying. `readFile` holds the whole file in memory.
