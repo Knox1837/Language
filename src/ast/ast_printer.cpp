@@ -188,8 +188,15 @@ void ASTPrinter::visitTryStmt(TryStmt& stmt) {
     std::ostringstream out;
     stmt.tryBody->accept(*this);
     out << "(try " << result;
-    stmt.catchBody->accept(*this);
-    out << " catch " << stmt.name.lexeme << (stmt.infoName ? " " + stmt.infoName->lexeme : "") << " " << result << ")";
+    if (stmt.catchBody) {
+        stmt.catchBody->accept(*this);
+        out << " catch " << stmt.name.lexeme << (stmt.infoName ? " " + stmt.infoName->lexeme : "") << " " << result;
+    }
+    if (stmt.finallyBody) {
+        stmt.finallyBody->accept(*this);
+        out << " finally " << result;
+    }
+    out << ")";
     result = out.str();
 }
 

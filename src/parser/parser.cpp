@@ -12,7 +12,7 @@
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
 // forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER ( "," IDENTIFIER )? "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
-// tryStmt     -> "try" block "catch" "(" IDENTIFIER ")" block
+// tryStmt     -> "try" block ( "catch" "(" IDENTIFIER ( "," IDENTIFIER )? ")" block )? ( "finally" block )?     (at least one of catch and finally)
 // returnStmt  -> "return" expression? ";"
 // block       -> "{" declaration* "}"
 // exprStmt    -> expression ";" | target ( "++" | "--" ) ";"   (a statement only; sugar for target += 1 / target -= 1. The same form is allowed as the increment clause of a classic for)
@@ -273,19 +273,32 @@ StmtPtr Parser::forInStatement() {
 
 StmtPtr Parser::tryStatement() {
     consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
+    Token tryKeyword = previous(); // the "{" was consumed; "try" is two back, but only its line is needed, and the "{" is on it in all but odd layouts
     StmtPtr tryBody = std::make_unique<BlockStmt>(block());
-    consume(TokenType::CATCH, "Expect 'catch' after the try block.");
-    consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
-    Token name = consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
+
+    Token name(TokenType::IDENTIFIER, "", tryKeyword.line); // stays empty when there is no catch
     std::optional<Token> infoName;
-    if (match({TokenType::COMMA})) {
-        infoName = consume(TokenType::IDENTIFIER, "Expect a second variable name for the error's line and trace.");
-        if (infoName->lexeme == name.lexeme) error(*infoName, "The two catch variables must have different names.");
+    StmtPtr catchBody;
+    StmtPtr finallyBody;
+    if (!check(TokenType::FINALLY)) {
+        consume(TokenType::CATCH, "Expect 'catch' or 'finally' after the try block.");
     }
-    consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
-    consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
-    StmtPtr catchBody = std::make_unique<BlockStmt>(block());
-    return std::make_unique<TryStmt>(std::move(tryBody), std::move(name), std::move(infoName), std::move(catchBody));
+    if (previous().type == TokenType::CATCH) {
+        consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
+        name = consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
+        if (match({TokenType::COMMA})) {
+            infoName = consume(TokenType::IDENTIFIER, "Expect a second variable name for the error's line and trace.");
+            if (infoName->lexeme == name.lexeme) error(*infoName, "The two catch variables must have different names.");
+        }
+        consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
+        consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
+        catchBody = std::make_unique<BlockStmt>(block());
+    }
+    if (match({TokenType::FINALLY})) {
+        consume(TokenType::LEFT_BRACE, "Expect '{' before the finally body.");
+        finallyBody = std::make_unique<BlockStmt>(block());
+    }
+    return std::make_unique<TryStmt>(std::move(tryBody), std::move(name), std::move(infoName), std::move(catchBody), std::move(finallyBody));
 }
 
 StmtPtr Parser::returnStatement() {

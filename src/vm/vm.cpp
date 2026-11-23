@@ -165,6 +165,7 @@ int VM::currentLine() const {
 // Raises a runtime error: records it and returns. Nothing is printed and nothing is unwound here; every caller goes on to leave runLoop() with RUNTIME_ERROR, and run() then decides, with the whole picture, whether a `try` catches it or it is printed.
 void VM::runtimeError(const std::string& message) {
     pendingUser = false;
+    hasPendingTrace = false;
     pendingValue = VMValue{message};
     pendingLine = currentLine();
     errorPending = true;
@@ -172,6 +173,7 @@ void VM::runtimeError(const std::string& message) {
 
 void VM::raiseError(const VMValue& value) {
     pendingUser = true;
+    hasPendingTrace = false;
     pendingValue = value;
     pendingLine = currentLine();
     errorPending = true;
@@ -202,7 +204,8 @@ VMValue VM::makeErrorInfo() const {
     info->entries.emplace(MapKey(std::string("kind")), VMValue{pendingUser ? std::string("user") : classifyError(asVMString(pendingValue))});
     info->entries.emplace(MapKey(std::string("line")), VMValue{static_cast<double>(pendingLine)});
     auto lines = std::make_shared<VMArray>();
-    for (const std::string& line : formatTrace(currentTrace())) lines->elements.push_back(line);
+    // An error raised again after a finally block (OP_RETHROW) keeps the trace it first had: the frames it passed through are gone by now.
+    for (const std::string& line : hasPendingTrace ? pendingTraceLines : formatTrace(currentTrace())) lines->elements.push_back(line);
     info->entries.emplace(MapKey(std::string("trace")), VMValue{lines});
     return VMValue{info};
 }
@@ -214,7 +217,7 @@ bool VM::unwindToHandler(size_t baseFrames) {
     handlers.pop_back();
 
     VMValue info; // built BEFORE the frames the error passed through are popped below
-    if (handler.wantsInfo) info = makeErrorInfo();
+    if (handler.wantsInfo || handler.isFinally) info = makeErrorInfo();
 
     closeUpvalues(handler.stackHeight); // locals of the abandoned code that closures captured must be closed BEFORE their slots go
 
@@ -225,8 +228,14 @@ bool VM::unwindToHandler(size_t baseFrames) {
     }
     stack.resize(handler.stackHeight);
 
-    push(std::move(pendingValue)); // the caught value becomes the catch variable's slot
-    if (handler.wantsInfo) push(std::move(info)); // and the info map the second one's
+    if (handler.isFinally) {
+        // The catch-all handler of a try/finally: the try's hidden slots " error" and " errinfo" are the two just below the stack height it recorded.
+        stack[handler.stackHeight - 2] = std::move(pendingValue);
+        stack[handler.stackHeight - 1] = std::move(info);
+    } else {
+        push(std::move(pendingValue)); // the caught value becomes the catch variable's slot
+        if (handler.wantsInfo) push(std::move(info)); // and the info map the second one's
+    }
     pendingValue = VMValue{};
     errorPending = false;
     currentFrame().ip = handler.catchIp;
@@ -237,8 +246,8 @@ void VM::reportUncaughtError() {
     std::string text = isVMString(pendingValue) ? asVMString(pendingValue) : stringifyVMValue(pendingValue);
     std::cerr << "[line " << pendingLine << "] Runtime error: " << text << "\n";
     // The trace is printed only when the error happened inside a function or an import (frame 0 is the script): for one at the top level it would only repeat the line above.
-    if (frames.size() > 1) {
-        for (const std::string& line : formatTrace(currentTrace())) std::cerr << "  " << line << "\n";
+    if (hasPendingTrace ? pendingTraceLines.size() > 1 : frames.size() > 1) {
+        for (const std::string& line : hasPendingTrace ? pendingTraceLines : formatTrace(currentTrace())) std::cerr << "  " << line << "\n";
     }
 
     // Abandon the whole program, so a subsequent REPL line (if any) starts clean rather than resuming mid-call; the same as the tree-walker's interpret() catching the error at the top level.
@@ -731,13 +740,36 @@ InterpretResult VM::runLoop(size_t baseFrames) {
             case OpCode::OP_TRY: {
                 uint16_t offset = readShort();
                 size_t catchIp = currentFrame().ip + offset; // computed BEFORE the flag byte is read: the jump offset counts from the end of its own two bytes
-                bool wantsInfo = readByte() != 0;
-                handlers.push_back(TryHandler{frames.size(), stack.size(), catchIp, wantsInfo});
+                uint8_t mode = readByte(); // 0: a catch, 1: a catch with a second variable, 2: the catch-all of a try/finally
+                handlers.push_back(TryHandler{frames.size(), stack.size(), catchIp, mode == 1, mode == 2});
                 break;
             }
             case OpCode::OP_POP_HANDLER: {
                 handlers.pop_back();
                 break;
+            }
+            case OpCode::OP_CALL_FINALLY: {
+                uint16_t offset = readShort();
+                push(VMValue{static_cast<double>(currentFrame().ip)}); // the return address: the instruction after this one
+                currentFrame().ip += offset;
+                break;
+            }
+            case OpCode::OP_END_FINALLY: {
+                VMValue address = pop();
+                currentFrame().ip = static_cast<size_t>(std::get<double>(address));
+                break;
+            }
+            case OpCode::OP_RETHROW: {
+                // [.. " error" " errinfo"]: the error that was caught for the finally block, and the map describing it.
+                const auto& entries = asVMMap(peekStack(0))->entries;
+                pendingValue = peekStack(1);
+                pendingUser = std::get<std::string>(entries.at(MapKey(std::string("kind")))) == "user";
+                pendingLine = static_cast<int>(std::get<double>(entries.at(MapKey(std::string("line")))));
+                pendingTraceLines.clear();
+                for (const VMValue& line : asVMArray(entries.at(MapKey(std::string("trace"))))->elements) pendingTraceLines.push_back(std::get<std::string>(line));
+                hasPendingTrace = true;
+                errorPending = true;
+                return InterpretResult::RUNTIME_ERROR;
             }
             case OpCode::OP_ITER_PREP: {
                 if (isVMArray(peekStack(0))) break;  // an array is walked as it is

@@ -177,10 +177,11 @@ struct ForInStmt : Stmt {
 // Runs `body`. If a runtime error is raised inside it (by the language, a built-in, or error(value)), the rest of the body is abandoned and `handler` runs with `name` bound to the error: the thrown value for error(value), the message string for anything else. Both bodies are BlockStmts.
 struct TryStmt : Stmt {
     StmtPtr tryBody;
-    Token name;        // the catch variable
-    std::optional<Token> infoName; // the optional second catch variable: a map {"line": ..., "trace": [...]} describing where the error was raised
-    StmtPtr catchBody;
-    TryStmt(StmtPtr tryBody, Token name, std::optional<Token> infoName, StmtPtr catchBody)
-        : tryBody(std::move(tryBody)), name(std::move(name)), infoName(std::move(infoName)), catchBody(std::move(catchBody)) {}
+    Token name;        // the catch variable (meaningless when there is no catch)
+    std::optional<Token> infoName; // the optional second catch variable: a map {"kind": ..., "line": ..., "trace": [...]} describing the error
+    StmtPtr catchBody;   // null when the statement is try/finally with no catch
+    StmtPtr finallyBody; // null when there is no finally
+    TryStmt(StmtPtr tryBody, Token name, std::optional<Token> infoName, StmtPtr catchBody, StmtPtr finallyBody)
+        : tryBody(std::move(tryBody)), name(std::move(name)), infoName(std::move(infoName)), catchBody(std::move(catchBody)), finallyBody(std::move(finallyBody)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitTryStmt(*this); }
 };

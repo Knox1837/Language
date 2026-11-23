@@ -75,7 +75,8 @@ private:
         size_t frameCount;  // frames.size() when the try began: the handler belongs to frame frameCount - 1
         size_t stackHeight; // stack.size() then: everything above it is discarded, and the error value is pushed in its place
         size_t catchIp;     // where the catch block starts, in the frame that ran the try
-        bool wantsInfo;     // the catch has a second variable: push the error's {"line", "trace"} map after the error value
+        bool wantsInfo;     // the catch has a second variable: push the error's {"kind", "line", "trace"} map after the error value
+        bool isFinally;     // the catch-all handler of a try/finally: store the error in the try's two hidden slots instead of pushing it
     };
     std::vector<TryHandler> handlers; // innermost last. Entries die with their try body (OP_POP_HANDLER), with their frame (OP_RETURN) or when an error is caught
 
@@ -89,6 +90,8 @@ private:
     VMValue pendingValue; // what was thrown: a message string for a language error, any value for error(value)
     int pendingLine = -1; // the source line the error was raised on, for the message of an uncaught one
     bool pendingUser = false; // raised by error(value) or assert, not by the language itself: its kind is "user"
+    bool hasPendingTrace = false;                // set by OP_RETHROW: the error is an old one, raised again after a finally block, and keeps the trace it first had
+    std::vector<std::string> pendingTraceLines;  // that trace, already formatted
     int currentLine() const;
 
     CallFrame& currentFrame() { return frames.back(); }

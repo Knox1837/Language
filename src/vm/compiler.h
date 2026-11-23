@@ -31,6 +31,14 @@ struct LoopInfo {
     int tryDepth = 0;                  // how many try bodies were open when the loop began: a break/continue inside the body unregisters the handlers of every try it leaves (those deeper than this)
 };
 
+// One try statement WITH a finally that is being compiled, so every way of leaving it (break, continue, return) knows to run the finally block on the way out. The finally block is compiled once, as a subroutine after the try and catch code, and each exit calls it with OP_CALL_FINALLY.
+struct FinallyInfo {
+    int tryDepthBefore;              // handlers registered outside this try: a jump that leaves it pops back down to this many
+    size_t localCount;               // locals.size() once the three hidden slots are declared: locals at or above this index belong to the try or catch body and are discarded before the subroutine is called
+    size_t retvalSlot;               // the first of the three hidden slots (" retval", " error", " errinfo"): where a `return` parks its value while the finally runs
+    std::vector<size_t> callSites;   // the OP_CALL_FINALLY operands to patch to the subroutine's address
+};
+
 // Compile-time state for ONE function currently being compiled (the top-level script is FunctionState #0). 
 // Kept on a stack in Compiler so entering a nested function declaration is just push-a-new-one, compile its body, pop back to the enclosing state.
 struct FunctionState {
@@ -42,6 +50,7 @@ struct FunctionState {
     FunctionType type = FunctionType::SCRIPT;
     int tryDepth = 0;                 // try BODIES currently open at this point of the code (a catch body is not inside its handler)
     std::vector<LoopInfo> loops = {}; // loops enclosing the current position in THIS function, innermost last (a loop outside a function does not make `break` legal inside it)
+    std::vector<FinallyInfo> finallies = {}; // try statements with a finally whose try or catch body encloses the current position, innermost last
 };
 
 class Compiler {
@@ -115,7 +124,13 @@ private:
     void breakStatement();    // "break" ";"     -> discard the body's locals, jump past the loop
     void continueStatement(); // "continue" ";" -> discard the body's locals, jump to the next iteration
     void emitLoopLocalsCleanup(int loopScopeDepth); // emits the pops / upvalue-closes for every local deeper than loopScopeDepth WITHOUT forgetting them (code after the jump is still compiled in their scope)
-    void tryStatement();      // "try" block "catch" "(" IDENTIFIER ")" block
+    void tryStatement();      // "try" block ( "catch" "(" IDENTIFIER ( "," IDENTIFIER )? ")" block )? ( "finally" block )?
+    // What follows the try block that starts at the current token, found by skipping braces, since `break` and `return` inside the try body are compiled before the catch and finally are reached.
+    struct TryShape { bool hasCatch; bool hasFinally; };
+    TryShape scanTryShape() const;
+    // What a break/continue/return does to leave for a target: `mode` says which. Runs the finally of every try it leaves, innermost first.
+    enum class ExitMode { JUMP, RETURN_VALUE, RETURN_THIS };
+    void emitExit(int targetScopeDepth, int targetTryDepth, ExitMode mode);
     void emitHandlerPops(int downToTryDepth); // OP_POP_HANDLER for every try body open now that was not open at `downToTryDepth`: a break/continue is leaving them
     void forStatement();
     void forInStatement(); // the rest of "for (var x in xs) body" once the "(" is consumed

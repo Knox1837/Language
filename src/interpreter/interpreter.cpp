@@ -380,8 +380,49 @@ void Interpreter::visitContinueStmt(ContinueStmt&) {
 }
 
 void Interpreter::visitTryStmt(TryStmt& stmt) {
+    if (!stmt.finallyBody) {
+        runTryCatch(stmt);
+        return;
+    }
+
+    // try/finally: run the try (and its catch), whatever way it ends, then the finally block, then carry on ending that way. There are four ways a try can end: normally, by a runtime error, by `return` (a ReturnException), and by `break`/`continue` (the loopSignal flag).
+    std::shared_ptr<Environment> savedEnvironment = environment;
+    const size_t stackDepth = callStack().size();
+    std::optional<RuntimeError> pendingError;
+    std::optional<ReturnException> pendingReturn;
+    std::vector<CallInfo> pendingFrames; // the frames the error passed through, kept so the error's stack trace survives the finally block
+    try {
+        runTryCatch(stmt);
+    } catch (const RuntimeError& error) {
+        pendingError = error;
+        pendingFrames.assign(callStack().begin() + stackDepth, callStack().end());
+        callStack().resize(stackDepth); // the finally block runs in THIS frame
+    } catch (const ReturnException& returned) {
+        pendingReturn = returned;
+    }
+    environment = savedEnvironment;
+
+    // A pending break/continue must not stop the finally block's own statements, so it is set aside while that runs.
+    LoopSignal pendingSignal = loopSignal;
+    loopSignal = LoopSignal::NONE;
+    execute(*stmt.finallyBody); // an error or a `return` in here escapes and REPLACES whatever was pending
+    if (loopSignal != LoopSignal::NONE) return; // so does a break/continue in here
+
+    loopSignal = pendingSignal;
+    if (pendingError) {
+        callStack().insert(callStack().end(), pendingFrames.begin(), pendingFrames.end());
+        throw *pendingError;
+    }
+    if (pendingReturn) throw *pendingReturn;
+}
+
+void Interpreter::runTryCatch(TryStmt& stmt) {
     std::shared_ptr<Environment> savedEnvironment = environment;
     const size_t stackDepth = callStack().size(); // the frames below this are still running when the handler does
+    if (!stmt.catchBody) {
+        execute(*stmt.tryBody); // try/finally: errors are not caught here
+        return;
+    }
     try {
         execute(*stmt.tryBody);
         return; // no error (a `return`, which travels as a ReturnException, and `break`/`continue`, which set loopSignal, pass straight through)

@@ -376,6 +376,10 @@ void Compiler::returnStatement() {
             consume(TokenType::SEMICOLON, "Expect ';' after return value.");
             emitByte(OpCode::OP_POP);
         }
+        if (!current_().finallies.empty()) {
+            emitExit(0, 0, ExitMode::RETURN_THIS); // run the finally blocks this return leaves, then return `this`
+            return;
+        }
         emitReturn();
         return;
     }
@@ -387,6 +391,14 @@ void Compiler::returnStatement() {
     } else {
         expression();
         consume(TokenType::SEMICOLON, "Expect ';' after return value.");
+    }
+    if (!current_().finallies.empty()) {
+        // Inside a try with a finally: park the value in that try's hidden slot (it is on top of the stack, where the cleanup below would pop it), run the finally blocks, then return it.
+        emitByte(OpCode::OP_SET_LOCAL);
+        emitByte(static_cast<uint8_t>(current_().finallies.back().retvalSlot));
+        emitByte(OpCode::OP_POP);
+        emitExit(0, 0, ExitMode::RETURN_VALUE);
+        return;
     }
     emitByte(OpCode::OP_RETURN);
 }
@@ -1130,49 +1142,187 @@ void Compiler::emitHandlerPops(int downToTryDepth) {
     for (int depth = current_().tryDepth; depth > downToTryDepth; depth--) emitByte(OpCode::OP_POP_HANDLER);
 }
 
-void Compiler::tryStatement() {
-    // try { body } catch (e) { handler }   or   try { body } catch (e, info) { handler }
-    consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
-    size_t tryJump = emitJump(OpCode::OP_TRY);
-    emitByte(0); // OP_TRY's flag byte: patched to 1 below if the catch turns out to have a second variable
-    size_t infoFlag = currentChunk().code.size() - 1;
-    current_().tryDepth++;
-    beginScope();
-    block();
-    endScope();
-    current_().tryDepth--;
-    emitByte(OpCode::OP_POP_HANDLER);
-    size_t endJump = emitJump(OpCode::OP_JUMP);
+Compiler::TryShape Compiler::scanTryShape() const {
+    // `current` is at the "{" of the try body. Skip that block, then see whether a catch and/or a finally follows. Strings are single tokens, so counting braces is exact.
+    auto skipBlock = [&](size_t i) {
+        int depth = 0;
+        for (; i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE; i++) {
+            if (tokens[i].type == TokenType::LEFT_BRACE) depth++;
+            else if (tokens[i].type == TokenType::RIGHT_BRACE && --depth == 0) return i + 1;
+        }
+        return i;
+    };
+    TryShape shape{false, false};
+    size_t i = skipBlock(current);
+    if (i < tokens.size() && tokens[i].type == TokenType::CATCH) {
+        shape.hasCatch = true;
+        while (i < tokens.size() && tokens[i].type != TokenType::LEFT_BRACE && tokens[i].type != TokenType::END_OF_FILE) i++; // the "(e)" or "(e, info)"
+        i = skipBlock(i);
+    }
+    shape.hasFinally = i < tokens.size() && tokens[i].type == TokenType::FINALLY;
+    return shape;
+}
 
-    patchJump(tryJump); // the catch block starts here
-    if (!match(TokenType::CATCH)) {
-        errorAt(peek(), "Expect 'catch' after the try block."); // one clear error: the rest of the file still compiles normally instead of cascading
+// Leaves the current position for a target, in one of three ways (`mode`): JUMP for break and continue (the caller emits the jump itself), RETURN_VALUE for a `return` whose value is already parked in the innermost finally's hidden slot, RETURN_THIS for a `return` in an initializer. For each try-with-finally being left, innermost first: discard that try's body locals, unregister its handlers, and call its finally block. Then discard what remains down to the target and unregister the handlers above it. Without any finally in the way this is the same code a break/continue always was.
+void Compiler::emitExit(int targetScopeDepth, int targetTryDepth, ExitMode mode) {
+    FunctionState& fs = current_();
+    size_t onStack = fs.locals.size(); // how many of the compile-time locals are still on the runtime stack as the code emitted here runs
+    int tryDepth = fs.tryDepth;
+    auto popLocalsTo = [&](size_t count) {
+        while (onStack > count) {
+            emitByte(fs.locals[onStack - 1].isCaptured ? OpCode::OP_CLOSE_UPVALUE : OpCode::OP_POP);
+            onStack--;
+        }
+    };
+
+    for (size_t i = fs.finallies.size(); i > 0 && fs.finallies[i - 1].tryDepthBefore >= targetTryDepth; --i) {
+        size_t localCount = fs.finallies[i - 1].localCount;
+        popLocalsTo(localCount);
+        while (tryDepth > fs.finallies[i - 1].tryDepthBefore) {
+            emitByte(OpCode::OP_POP_HANDLER);
+            tryDepth--;
+        }
+        fs.finallies[i - 1].callSites.push_back(emitJump(OpCode::OP_CALL_FINALLY));
+
+        if (mode == ExitMode::RETURN_VALUE) {
+            // Hand the value on to the next try out, or leave it on top for the return.
+            emitByte(OpCode::OP_GET_LOCAL);
+            emitByte(static_cast<uint8_t>(fs.finallies[i - 1].retvalSlot));
+            bool outerToo = i > 1 && fs.finallies[i - 2].tryDepthBefore >= targetTryDepth;
+            if (outerToo) {
+                emitByte(OpCode::OP_SET_LOCAL);
+                emitByte(static_cast<uint8_t>(fs.finallies[i - 2].retvalSlot));
+                emitByte(OpCode::OP_POP);
+            }
+        }
+    }
+
+    if (mode == ExitMode::RETURN_VALUE) {
+        emitByte(OpCode::OP_RETURN); // the value is on top; the frame, and with it every local and handler, goes
         return;
     }
-    consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
-    consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
-    Token name = previous();
-    Token infoName = name; // only meaningful when hasInfo
-    bool hasInfo = false;
-    if (match(TokenType::COMMA)) {
-        hasInfo = true;
-        consume(TokenType::IDENTIFIER, "Expect a second variable name for the error's line and trace.");
-        infoName = previous();
-        if (infoName.lexeme == name.lexeme) errorAt(infoName, "The two catch variables must have different names.");
-        currentChunk().code[infoFlag] = 1;
+    if (mode == ExitMode::RETURN_THIS) {
+        emitReturn();
+        return;
     }
-    consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
-    consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
+    while (onStack > 0 && fs.locals[onStack - 1].depth > targetScopeDepth) popLocalsTo(onStack - 1);
+    while (tryDepth > targetTryDepth) {
+        emitByte(OpCode::OP_POP_HANDLER);
+        tryDepth--;
+    }
+}
 
-    beginScope();
-    current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the error value is already in its slot
-    if (hasInfo) current_().locals.push_back(LocalVar{infoName, current_().scopeDepth}); // the info map was pushed right after it
+void Compiler::tryStatement() {
+    // try { body } catch (e) { handler }   or   try { body } catch (e, info) { handler }   or   try { body } finally { cleanup }   or all three.
+    TryShape shape = scanTryShape();
+    consume(TokenType::LEFT_BRACE, "Expect '{' after 'try'.");
+    if (!shape.hasCatch && !shape.hasFinally) {
+        beginScope();
+        block();
+        endScope();
+        errorAt(peek(), "Expect 'catch' or 'finally' after the try block."); // one clear error: the rest of the file still compiles normally instead of cascading
+        return;
+    }
+
+    // With a finally the whole statement gets a scope of its own holding three hidden slots, and a catch-all handler (registered first, so it is the OUTER one: a catch inside it gets first try at an error from the try body, and an error from the catch body reaches it).
+    //   [..outer locals, " retval", " error", " errinfo"]   <- the handler's stack height
+    // A `return` parks its value in " retval" while the finally runs; an error that was caught for the finally is stored in " error" and " errinfo" so the block can run and the error can be raised again afterwards.
+    size_t finallyHandlerJump = 0;
+    if (shape.hasFinally) {
+        if (current_().locals.size() + 4 > 255) {
+            errorAt(previous(), "Too many local variables in function.");
+        }
+        beginScope();
+        for (const char* hidden : {" retval", " error", " errinfo"}) {
+            emitByte(OpCode::OP_NIL);
+            current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, hidden, previous().line), current_().scopeDepth});
+        }
+        current_().finallies.push_back(FinallyInfo{current_().tryDepth, current_().locals.size(), current_().locals.size() - 3, {}});
+        finallyHandlerJump = emitJump(OpCode::OP_TRY);
+        emitByte(2);
+        current_().tryDepth++;
+    }
+
+    size_t tryJump = 0;
+    size_t infoFlag = 0;
+    size_t endJump = 0;
+    if (shape.hasCatch) {
+        tryJump = emitJump(OpCode::OP_TRY);
+        emitByte(0); // OP_TRY's flag byte: patched to 1 below if the catch turns out to have a second variable
+        infoFlag = currentChunk().code.size() - 1;
+        current_().tryDepth++;
+    }
     beginScope();
     block();
     endScope();
-    endScope(); // pops the error value (and the info map)
+    if (shape.hasCatch) {
+        current_().tryDepth--;
+        emitByte(OpCode::OP_POP_HANDLER);
+        endJump = emitJump(OpCode::OP_JUMP);
 
-    patchJump(endJump);
+        patchJump(tryJump); // the catch block starts here
+        if (!match(TokenType::CATCH)) {
+            errorAt(peek(), "Expect 'catch' after the try block.");
+            return;
+        }
+        consume(TokenType::LEFT_PAREN, "Expect '(' after 'catch'.");
+        consume(TokenType::IDENTIFIER, "Expect a variable name for the caught error.");
+        Token name = previous();
+        Token infoName = name; // only meaningful when hasInfo
+        bool hasInfo = false;
+        if (match(TokenType::COMMA)) {
+            hasInfo = true;
+            consume(TokenType::IDENTIFIER, "Expect a second variable name for the error's line and trace.");
+            infoName = previous();
+            if (infoName.lexeme == name.lexeme) errorAt(infoName, "The two catch variables must have different names.");
+            currentChunk().code[infoFlag] = 1;
+        }
+        consume(TokenType::RIGHT_PAREN, "Expect ')' after the catch variable.");
+        consume(TokenType::LEFT_BRACE, "Expect '{' before the catch body.");
+
+        beginScope();
+        current_().locals.push_back(LocalVar{name, current_().scopeDepth}); // the error value is already in its slot
+        if (hasInfo) current_().locals.push_back(LocalVar{infoName, current_().scopeDepth}); // the info map was pushed right after it
+        beginScope();
+        block();
+        endScope();
+        endScope(); // pops the error value (and the info map)
+
+        patchJump(endJump);
+    }
+
+    if (!shape.hasFinally) return;
+
+    // The try (and catch) ended normally: unregister the catch-all handler, run the finally block, skip the error path.
+    current_().tryDepth--;
+    emitByte(OpCode::OP_POP_HANDLER);
+    current_().finallies.back().callSites.push_back(emitJump(OpCode::OP_CALL_FINALLY));
+    size_t overErrorPath = emitJump(OpCode::OP_JUMP);
+
+    // An error reached the catch-all handler: the VM has stored it in the hidden slots. Run the finally block, then raise the error again.
+    patchJump(finallyHandlerJump);
+    current_().finallies.back().callSites.push_back(emitJump(OpCode::OP_CALL_FINALLY));
+    emitByte(OpCode::OP_RETHROW);
+
+    // The finally block itself, as a subroutine. From here on this try is no longer being left by a break or return, so a `return` INSIDE the finally block does not run it again.
+    FinallyInfo info = std::move(current_().finallies.back());
+    current_().finallies.pop_back();
+    for (size_t site : info.callSites) patchJump(site);
+
+    if (!match(TokenType::FINALLY)) {
+        errorAt(peek(), "Expect 'finally' after the catch block.");
+        return;
+    }
+    consume(TokenType::LEFT_BRACE, "Expect '{' before the finally body.");
+    current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " return address", previous().line), current_().scopeDepth}); // OP_CALL_FINALLY pushed it: a slot like any other, at index localCount
+    beginScope();
+    block();
+    endScope();
+    current_().locals.pop_back(); // not popped by an instruction: OP_END_FINALLY takes it off and jumps
+    emitByte(OpCode::OP_END_FINALLY);
+
+    patchJump(overErrorPath);
+    endScope(); // pops the three hidden slots
 }
 
 void Compiler::breakStatement() {
@@ -1182,8 +1332,7 @@ void Compiler::breakStatement() {
         errorAt(keyword, "Can't use 'break' outside of a loop.");
         return;
     }
-    emitLoopLocalsCleanup(current_().loops.back().scopeDepth);
-    emitHandlerPops(current_().loops.back().tryDepth);
+    emitExit(current_().loops.back().scopeDepth, current_().loops.back().tryDepth, ExitMode::JUMP);
     size_t jump = emitJump(OpCode::OP_JUMP);
     current_().loops.back().breakJumps.push_back(jump);
 }
@@ -1195,8 +1344,7 @@ void Compiler::continueStatement() {
         errorAt(keyword, "Can't use 'continue' outside of a loop.");
         return;
     }
-    emitLoopLocalsCleanup(current_().loops.back().scopeDepth);
-    emitHandlerPops(current_().loops.back().tryDepth);
+    emitExit(current_().loops.back().scopeDepth, current_().loops.back().tryDepth, ExitMode::JUMP);
     emitLoop(current_().loops.back().continueTarget);
 }
 
