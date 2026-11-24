@@ -1082,8 +1082,9 @@ the stress build.
 
 ## Design note: file I/O
 
-`readFile`, `readLines`, `writeFile`, `appendFile`, `fileExists` and `deleteFile`
-(see "I/O" in `language_spec.md`) are ordinary natives in both engines. The
+`readFile`, `readLines`, `writeFile`, `appendFile`, `fileExists`, `deleteFile` and
+(added later) `isFile`, `isDir`, `listDir`, `makeDir`, `removeDir`, `renameFile` and
+`copyFile` (see "I/O" in `language_spec.md`) are ordinary natives in both engines. The
 work is in one header-only file, `src/util/file_io.h` (namespace `fileio`),
 called by `src/stdlib/io_lib.cpp` in the tree-walker and by `registerIo` in
 `vm_stdlib.cpp`, so the two cannot drift apart: the same bytes are written, the
@@ -1109,6 +1110,21 @@ Decisions worth knowing:
   because that is what every other language does with `open()`. `import` stays
   script-relative. Paths go through the narrow-character OS API unchanged, so a
   non-ASCII path on Windows is only as good as the system code page.
+- **The folder functions share the same helpers** (`listDir`, `makeDir`,
+  `removeDir`, `renameEntry`, `copyFile` in `fileio`) and follow the same
+  rules: failure is `false` plus a message, a path that is not there is an
+  answer ("no") and not an error where that makes sense (`removeDir`), and the
+  result does not depend on the platform. `listDir` sorts with `std::sort` on
+  `std::string`, which is bytewise, because `directory_iterator` order is
+  whatever the file system happens to give. `makeDir` strips trailing
+  separators first and decides `created` from whether the folder was there
+  beforehand, since `create_directories`'s return value is unreliable for
+  `"a/b/"` on some standard libraries. `renameFile` and `copyFile` check the
+  destination themselves and refuse, because `std::filesystem::rename` replaces
+  an existing file on some platforms and fails on others, and replacing data
+  silently is the worse default; `removeDir` refuses a non-empty folder rather
+  than calling `remove_all`, so there is no recursive delete to get wrong. Their
+  messages all start with a prefix `classifyError` maps to `"io"`.
 - **No new `.cpp` file,** so `CMakeLists.txt` needs no edit.
 
 The GC needs nothing special: `readLines` builds its `VMArray` as the native's

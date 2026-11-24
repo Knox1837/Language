@@ -1,4 +1,6 @@
 // error_kind.h: the "kind" of a runtime error, as a string, for the `kind` entry of the map a two-variable catch receives. Both engines use this one function, so a message gets the same kind in either.
+// A language error carries only its message, and the messages are the single place that says what went wrong, so the kind is worked out from the START of the message (never from anywhere inside it, since a message can contain user text, such as the name in "Undefined variable 'x'."). An error raised with error(value) or assert is not classified at all: its kind is always "user", whatever the value says.
+//To give a new error message a kind, add its beginning to the table below. A message the table doesn't know is "other"; test_error_kinds triggers one error of each kind.
 #pragma once
 #include <cctype>
 #include <string>
@@ -33,6 +35,7 @@ inline std::string classifyError(const std::string& message) {
         {"Undefined ", "name"},
         // files
         {"Could not open file", "io"}, {"Could not delete", "io"}, {"Could not read file", "io"}, {"Could not write to file", "io"},
+        {"Could not list folder", "io"}, {"Could not create folder", "io"}, {"Could not remove folder", "io"}, {"Could not rename", "io"}, {"Could not copy", "io"},
         // imports
         {"Could not open imported file", "import"}, {"Could not compile imported file", "import"},
         {"Circular import", "import"}, {"Imports are not available", "import"},

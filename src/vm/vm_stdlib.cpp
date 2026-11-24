@@ -522,6 +522,58 @@ static void registerIo(Globals& globals) {
         result = removed;
         return true;
     });
+
+    define(globals, "isFile", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        result = fileio::isFile(asVMString(args[0]));
+        return true;
+    });
+
+    define(globals, "isDir", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        result = fileio::isDir(asVMString(args[0]));
+        return true;
+    });
+
+    define(globals, "listDir", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        std::vector<std::string> names;
+        if (!fileio::listDir(asVMString(args[0]), names, error)) return false;
+        auto out = std::make_shared<VMArray>();
+        for (std::string& name : names) out->elements.push_back(VMValue{std::move(name)});
+        result = VMValue{out};
+        return true;
+    });
+
+    define(globals, "makeDir", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        bool created = false;
+        if (!fileio::makeDir(asVMString(args[0]), created, error)) return false;
+        result = created;
+        return true;
+    });
+
+    define(globals, "removeDir", 1, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error)) return false;
+        bool removed = false;
+        if (!fileio::removeDir(asVMString(args[0]), removed, error)) return false;
+        result = removed;
+        return true;
+    });
+
+    define(globals, "renameFile", 2, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error) || !needString(args[1], error)) return false;
+        if (!fileio::renameEntry(asVMString(args[0]), asVMString(args[1]), error)) return false;
+        result = VMValue{};
+        return true;
+    });
+
+    define(globals, "copyFile", 2, [](std::vector<VMValue>& args, VMValue& result, std::string& error) {
+        if (!needString(args[0], error) || !needString(args[1], error)) return false;
+        if (!fileio::copyFile(asVMString(args[0]), asVMString(args[1]), error)) return false;
+        result = VMValue{};
+        return true;
+    });
 }
 
 // gc() and heapSize() exist mainly so scripts (and tests) can observe the garbage collector. They are VM-only: the tree-walker has no such functions.

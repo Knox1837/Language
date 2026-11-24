@@ -1,9 +1,8 @@
-// file_io.h: the file operations behind readFile, writeFile, appendFile, readLines, fileExists and deleteFile. Header-only, and shared by the tree-walker (src/stdlib/io_lib.cpp) and the VM (src/vm/vm_stdlib.cpp), so both engines behave the same and say the same thing when something goes wrong.
-//
+// file_io.h: the file and folder operations behind readFile, writeFile, appendFile, readLines, fileExists, deleteFile, isFile, isDir, listDir, makeDir, removeDir, renameFile and copyFile. Header-only, and shared by the tree-walker (src/stdlib/io_lib.cpp) and the VM (src/vm/vm_stdlib.cpp), so both engines behave the same and say the same thing when something goes wrong.
 // Files are read and written as raw bytes (binary mode), matching a script string, which is a sequence of bytes. Nothing is translated: on Windows a "\n" in a string is written as one byte, not "\r\n", and "\r\n" in a file is read back as two bytes. readLines is the one place line endings are interpreted, and it accepts both.
-//
 // Every function reports failure by returning false and filling `error` with the message the script sees; none throws.
 #pragma once
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -84,6 +83,127 @@ inline bool removeFile(const std::string& path, bool& removed, std::string& erro
     removed = std::filesystem::remove(path, ec);
     if (ec) {
         error = "Could not delete file '" + path + "'.";
+        return false;
+    }
+    return true;
+}
+
+// True only for a regular file / only for a folder (fileExists is true for either).
+inline bool isFile(const std::string& path) {
+    std::error_code ec;
+    bool yes = std::filesystem::is_regular_file(path, ec);
+    return yes && !ec;
+}
+inline bool isDir(const std::string& path) {
+    std::error_code ec;
+    bool yes = std::filesystem::is_directory(path, ec);
+    return yes && !ec;
+}
+
+// The names (not paths) of what is in a folder, files and folders alike, without "." and "..", sorted bytewise so the order is the same on every platform and in both engines.
+inline bool listDir(const std::string& path, std::vector<std::string>& names, std::string& error) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(path, ec) || ec) {
+        error = "Could not list folder '" + path + "'.";
+        return false;
+    }
+    names.clear();
+    for (std::filesystem::directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
+        names.push_back(it->path().filename().string());
+    }
+    if (ec) {
+        error = "Could not list folder '" + path + "'.";
+        names.clear();
+        return false;
+    }
+    std::sort(names.begin(), names.end());
+    return true;
+}
+
+// Creates a folder, and any missing folders above it. `created` says whether it had to: a folder that is already there is not an error. A file in the way is.
+inline bool makeDir(const std::string& rawPath, bool& created, std::string& error) {
+    std::string path = rawPath;
+    while (path.size() > 1 && (path.back() == '/' || path.back() == '\\')) path.pop_back(); // "a/b/" is "a/b"
+    std::error_code ec;
+    if (path.empty()) {
+        error = "Could not create folder '" + rawPath + "'.";
+        return false;
+    }
+    if (std::filesystem::is_directory(path, ec)) {
+        created = false;
+        return true;
+    }
+    if (std::filesystem::exists(path, ec)) {
+        error = "Could not create folder '" + rawPath + "': a file is in the way.";
+        return false;
+    }
+    std::filesystem::create_directories(path, ec);
+    if (ec || !std::filesystem::is_directory(path, ec)) {
+        error = "Could not create folder '" + rawPath + "'.";
+        return false;
+    }
+    created = true;
+    return true;
+}
+
+// Removes an EMPTY folder. `removed` says whether there was one: a path that does not exist is not an error. A file, or a folder with anything in it, is.
+inline bool removeDir(const std::string& path, bool& removed, std::string& error) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        removed = false;
+        return true;
+    }
+    if (!std::filesystem::is_directory(path, ec)) {
+        error = "Could not remove folder '" + path + "': it is a file.";
+        return false;
+    }
+    if (std::filesystem::directory_iterator(path, ec) != std::filesystem::directory_iterator()) {
+        error = "Could not remove folder '" + path + "': it is not empty.";
+        return false;
+    }
+    removed = std::filesystem::remove(path, ec);
+    if (ec) {
+        error = "Could not remove folder '" + path + "'.";
+        return false;
+    }
+    return true;
+}
+
+// Renames or moves a file or a folder. It never replaces something that is already at the new path (the platforms disagree about whether it would, and a script can deleteFile first if it means to).
+inline bool renameEntry(const std::string& from, const std::string& to, std::string& error) {
+    std::error_code ec;
+    std::string base = "Could not rename '" + from + "' to '" + to + "'";
+    if (!std::filesystem::exists(from, ec)) {
+        error = base + ": '" + from + "' does not exist.";
+        return false;
+    }
+    if (std::filesystem::exists(to, ec)) {
+        error = base + ": '" + to + "' already exists.";
+        return false;
+    }
+    std::filesystem::rename(from, to, ec);
+    if (ec) {
+        error = base + ".";
+        return false;
+    }
+    return true;
+}
+
+// Copies one file (not a folder). Like renameEntry, it never replaces an existing path.
+inline bool copyFile(const std::string& from, const std::string& to, std::string& error) {
+    std::error_code ec;
+    std::string base = "Could not copy '" + from + "' to '" + to + "'";
+    if (!std::filesystem::is_regular_file(from, ec)) {
+        error = base + ": '" + from + "' is not a file.";
+        return false;
+    }
+    if (std::filesystem::exists(to, ec)) {
+        error = base + ": '" + to + "' already exists.";
+        return false;
+    }
+    std::filesystem::copy_file(from, to, ec);
+    if (ec) {
+        error = base + ".";
         return false;
     }
     return true;

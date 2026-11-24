@@ -725,6 +725,13 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
 | `appendFile(path, text)` | string, string → nil | adds `text` to the end; creates the file if it is missing |
 | `fileExists(path)` | string → bool | true if a file **or folder** exists at `path` |
 | `deleteFile(path)` | string → bool | deletes a file; returns whether there was one (a missing file is not an error). Never deletes a folder |
+| `isFile(path)` | string → bool | true only for a regular file (`fileExists` is true for a file or a folder) |
+| `isDir(path)` | string → bool | true only for a folder |
+| `listDir(path)` | string → array | the names (not paths) of everything in the folder, files and folders alike, without `.` and `..`, sorted bytewise (so `B.txt` comes before `a.txt`); an error if `path` is not a folder |
+| `makeDir(path)` | string → bool | creates the folder **and any missing folders above it**; returns `true` if it had to, `false` if the folder was already there. A file in the way is an error |
+| `removeDir(path)` | string → bool | removes an **empty** folder; returns whether there was one (a missing folder is not an error). A file, or a folder with anything in it, is an error: there is no recursive delete |
+| `renameFile(from, to)` | string, string → nil | renames or moves a file **or folder**; it never replaces what is already at `to` |
+| `copyFile(from, to)` | string, string → nil | copies one file (not a folder); it never replaces what is already at `to` |
 
 ```
 writeFile("scores.txt", "ada 90\nbob 72\n");
@@ -758,9 +765,22 @@ try {
   `... for writing.` and `... for appending.` (a missing folder, no permission),
   `Could not write to file 'p'.`, `Could not delete file 'p'.`, `Could not delete
   'p': it is a folder.`, and `Expected a string argument.` for a non-string
-  argument. Use `str()` to write a number.
-- The tree-walker reports these at line `0` and the VM at the line of the call, like
-  every native function (see below).
+  argument. Use `str()` to write a number. All of them (including the folder
+  messages below) have the error kind `"io"`.
+- **Folders.** `listDir`, `makeDir`, `removeDir`, `renameFile` and `copyFile` fail
+  with `Could not list folder 'p'.`, `Could not create folder 'p'.` (also `: a file
+  is in the way.`), `Could not remove folder 'p': it is a file.` or `: it is not
+  empty.`, `Could not rename 'a' to 'b': 'a' does not exist.` or `: 'b' already
+  exists.`, and `Could not copy 'a' to 'b': 'a' is not a file.` or `: 'b' already
+  exists.` A rename or copy that fails any other way (a missing folder above the
+  new path, moving across drives on some systems) says just `Could not rename 'a'
+  to 'b'.` or `Could not copy 'a' to 'b'.`.
+- **Nothing is replaced.** `renameFile` and `copyFile` refuse when something is
+  already at the new path: the platforms disagree about replacing, and a script
+  that means to replace can `deleteFile` first. To delete a folder with things in
+  it, empty it first: `listDir`, then `deleteFile` or `removeDir` on each name.
+- Errors are reported at the line of the call, like every native function (see
+  below).
 
 **Errors**
 
@@ -966,7 +986,7 @@ try {
 | `"key"` | a map key that is not there | `{"a": 1}["b"]` |
 | `"name"` | a name that is not defined | an undefined variable, property or method |
 | `"arity"` | the wrong number of arguments | `len()`, calling a two-parameter function with one argument |
-| `"io"` | a file could not be read, written or deleted | `readFile("missing.txt")`, writing into a missing folder |
+| `"io"` | a file or folder operation failed | `readFile("missing.txt")`, writing into a missing folder, `listDir` of a file, `removeDir` of a full folder |
 | `"import"` | an import failed | a file that cannot be opened or compiled, a circular import |
 | `"user"` | raised by `error(value)` or `assert`, with any value | `error("boom")`, `error(42)`, `assert(false)` |
 | `"other"` | anything else (internal errors) | |
@@ -1000,8 +1020,8 @@ a parse error, or "Undefined variable" for the names that are not keywords.
   kind, line and trace are in the second catch variable; there are no error
   classes you can name in the `catch`).
 - **Beyond whole-file I/O:** no reading a file a piece at a time, no binary
-  mode or seeking, no folders (listing, creating, deleting), no renaming or
-  copying. `readFile` holds the whole file in memory.
+  mode or seeking, no recursive folder delete or copy, no file sizes or dates.
+  `readFile` holds the whole file in memory.
 - **Map keys that are `nil`, arrays, maps, functions or instances.** Only strings,
   numbers and booleans can be keys.
 - **Operators and syntax:** no prefix `++x` and no `x++` inside an expression
