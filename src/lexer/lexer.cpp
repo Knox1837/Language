@@ -1,5 +1,7 @@
 // lexer.cpp: Implementation of the Lexer class
 #include "lexer.h"
+#include <cerrno>
+#include <cstdlib>
 #include <iostream>
 
 const std::unordered_map<std::string, TokenType> Lexer::keywords = {
@@ -181,7 +183,25 @@ void Lexer::number() {
         advance();
         while (isDigit(peek())) advance();
     }
-    addToken(TokenType::NUMBER, source.substr(start, current - start));
+    // Exponent: e or E, an optional + or -, then at least one digit (1e5, 2.5E-3). If no digit follows, the e is NOT part of the number and stays for the next token, exactly as before ("2e" is the number 2 then the name e).
+    if (peek() == 'e' || peek() == 'E') {
+        size_t digitAt = static_cast<size_t>(current) + 1;
+        if (digitAt < source.size() && (source[digitAt] == '+' || source[digitAt] == '-')) digitAt++;
+        if (digitAt < source.size() && isDigit(source[digitAt])) {
+            while (static_cast<size_t>(current) < digitAt) advance(); // the e and the sign
+            while (isDigit(peek())) advance();
+        }
+    }
+    std::string text = source.substr(start, current - start);
+    // The parser and compiler convert the text with std::stod, which throws when the value overflows to infinity or underflows (1e999, 1e-999). Reject those here with a normal error instead.
+    errno = 0;
+    std::strtod(text.c_str(), nullptr);
+    if (errno == ERANGE) {
+        std::cerr << "[line " << line << "] Number literal is out of range.\n";
+        errored = true;
+        return;
+    }
+    addToken(TokenType::NUMBER, text);
 }
 
 void Lexer::identifier() {

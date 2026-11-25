@@ -1472,7 +1472,8 @@ the tests compare them line by line. What still differs:
   no panic mode, so one syntax error can be followed by several
   follow-on errors.
 - **Errors the lexer reports** (an unknown escape sequence in a string, an
-  unterminated string, a stray character) stop the VM from running the
+  unterminated string, a stray character, a number literal out of range such
+  as `1e999`) stop the VM from running the
   program: `Lexer::hadError()` is checked by `Compiler::compile`, which then
   returns no function. The tree-walker prints the same message and runs the
   rest of the file anyway, as it does for any syntax error. (Before this, the

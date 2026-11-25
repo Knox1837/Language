@@ -56,7 +56,7 @@ or function names.
 
 | Type   | Example        | Notes |
 |--------|----------------|-------|
-| number | `10`, `3.14`   | always stored as double-precision float internally |
+| number | `10`, `3.14`, `1e-7` | always stored as double-precision float internally; an exponent (`e` or `E`, optional sign, digits) is allowed (see "Number printing") |
 | string | `"hello"`      | double-quoted only; a backslash starts an escape sequence (see "String escapes" below); may span several lines |
 | bool   | `true`, `false`| |
 | nil    | `nil`          | absence of a value; also the default for `var x;` with no initializer, and for a function with no `return` |
@@ -84,6 +84,12 @@ The layout follows JavaScript: plain decimals for magnitudes from `0.000001` up
 to just below `1e21`, scientific notation outside that range (`1e-7`,
 `2.5e-8`, `1e+21`). `-0` prints as `0`; infinity prints as `inf` / `-inf` and
 NaN as `nan`. Both engines use one shared function, so they always agree.
+
+A number literal can use the same exponent form: `1e5`, `2.5E-3`, `1e+21`. The
+`e` needs at least one digit after it (and after an optional `+` or `-`);
+otherwise it is not part of the number, so `2e` is the number `2` followed by
+the name `e`. A literal too large or too small for a double (`1e999`, `1e-999`)
+is a lexer error: `Number literal is out of range.`
 
 ## String escapes
 
