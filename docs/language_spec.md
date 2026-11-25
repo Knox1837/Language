@@ -67,6 +67,24 @@ or function names.
 | map    | `{"key": val}` | reference type; keys are strings, numbers or booleans (see Maps) |
 | module | (result of `import ... as name`) | a namespace exposing the imported file's top-level `def`/`class`/`var` bindings via `.` |
 
+## Number printing
+
+Wherever a number becomes text (`print`, `str()`, inside arrays and maps, in
+error messages), it is shown as the **shortest text that reads back as exactly
+the same number**:
+
+```
+print 3.14;          // 3.14
+print 1 / 3;         // 0.3333333333333333
+print 0.1 + 0.2;     // 0.30000000000000004  (the true value of the double)
+print 100;           // 100   (a whole number has no decimal point)
+```
+
+The layout follows JavaScript: plain decimals for magnitudes from `0.000001` up
+to just below `1e21`, scientific notation outside that range (`1e-7`,
+`2.5e-8`, `1e+21`). `-0` prints as `0`; infinity prints as `inf` / `-inf` and
+NaN as `nan`. Both engines use one shared function, so they always agree.
+
 ## String escapes
 
 Inside a string literal a backslash starts an escape sequence, which stands for
@@ -1026,5 +1044,3 @@ a parse error, or "Undefined variable" for the names that are not keywords.
   numbers and booleans can be keys.
 - **Operators and syntax:** no prefix `++x` and no `x++` inside an expression
   (only as a statement).
-- **Number formatting:** `print` shows whole numbers as integers and any other
-  number with six decimal places (`3.14` prints as `3.140000`).

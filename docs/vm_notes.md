@@ -449,10 +449,10 @@ and `charAt` are truncated toward zero, so `charAt("hello", 1.9)` is
 
 **Shared value formatting.** `stringifyVMValue()` is used by both
 `print` and `str()`, and reproduces the tree-walker's `stringifyValue`:
-whole numbers print as integers (`10`), other numbers via
-`std::to_string` (`3.140000`). Earlier, `print` used `cout << double`
-(`3.14`), so the two engines disagreed on non-integer output and
-`str(3.14)` would have disagreed with `print 3.14`.
+numbers go through `formatNumber()` in `src/util/number_format.h`
+(shortest round-trip text, `3.14`; see "Design note: number printing").
+Earlier the VM and the tree-walker each had their own number code, so
+they could disagree on non-integer output.
 
 ## Design note: `+` and unknown opcodes
 
@@ -1618,3 +1618,33 @@ first to see what follows. A `return` inside the finally block does not run the 
 finally again: the entry is removed from `FunctionState::finallies` before the block is
 compiled. A `break`, `return` or error inside the block abandons the return address
 and the hidden slots, which are just locals the function's end discards.
+
+## Design note: number printing
+
+Both engines turn a number into text with ONE function,
+`formatNumber(double)` in `src/util/number_format.h`; `stringifyValue`
+(tree-walker, `value.cpp`) and `stringifyVMValue` (VM, `vm_stdlib.cpp`)
+just call it. Everything that stringifies a value (print, `str()`, array
+and map contents, "Undefined map key" messages) therefore agrees.
+
+- **Digits.** `std::to_chars(..., std::chars_format::scientific)` with no
+  precision gives the shortest digit string that parses back to the same
+  double (MSVC 2019 16.4+, GCC 11+). The code splits that into the digits
+  and a decimal exponent, then lays them out itself.
+- **Layout (JavaScript's rule).** With `k` digits and the decimal point
+  after the first `n`: `k <= n <= 21` is a whole number padded with zeros
+  (`100`, 1e20 as `100000000000000000000`); `0 < n <= 21` puts the point
+  inside the digits (`3.14`); `-6 < n <= 0` is `0.` plus zeros
+  (`0.000001`); anything else is scientific with a signed exponent and no
+  padding (`1e-7`, `2.5e-8`, `1e+21`).
+- **Special values.** `-0` prints `0`, infinity `inf` / `-inf`, NaN `nan`
+  (the same words as before).
+- **Why not a fixed precision.** `%.15g` would print `0.1 + 0.2` as `0.3`
+  but hide real differences between doubles, and `%.17g` prints `0.1` as
+  `0.10000000000000001`. Shortest round-trip is exact and still prints the
+  numbers people type as typed. The known surprise is `0.1 + 0.2`, which
+  prints `0.30000000000000004` because that is the stored value.
+- **Changed output.** Integers are unchanged. Non-integers lose the
+  trailing zeros and gain their real digits; whole numbers of 9e18 and up
+  used to print through `%f` (VM) or an out-of-range cast (tree-walker) and
+  now print as above.

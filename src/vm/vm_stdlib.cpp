@@ -1,5 +1,6 @@
 // vm_stdlib.cpp: native functions for the VM. Names, arities and error messages match the tree-walker's stdlib (src/stdlib/) so both engines behave the same.
 #include "vm_stdlib.h"
+#include "../util/number_format.h"
 #include "vm.h"
 #include "vm_array.h"
 #include "vm_array_lib.h"
@@ -29,12 +30,7 @@ static std::string stringifyImpl(const VMValue& value, std::vector<const void*>&
     if (isVMNil(value)) return "nil";
     if (isVMBool(value)) return asVMBool(value) ? "true" : "false";
     if (isVMNumber(value)) {
-        double d = asVMNumber(value);
-        // Whole numbers print without a decimal part. The range check keeps the long long cast well-defined for huge values, NaN and infinity.
-        if (std::isfinite(d) && std::fabs(d) < 9.0e18 && d == static_cast<long long>(d)) {
-            return std::to_string(static_cast<long long>(d));
-        }
-        return std::to_string(d);
+        return formatNumber(asVMNumber(value)); // same function as the tree-walker (util/number_format.h)
     }
     if (isVMString(value)) return asVMString(value);
     if (isVMClosure(value)) return functionLabel(asVMClosure(value)->function->name);
