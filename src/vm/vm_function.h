@@ -6,7 +6,8 @@
 class VMFunction {
 public:
     Chunk chunk;
-    int arity = 0;
+    int arity = 0;      // the number of parameters (the most arguments a call may pass)
+    int minArity = 0;   // how many of them have no default (the least arguments a call may pass)
     int upvalueCount = 0;
     std::string name;
 };

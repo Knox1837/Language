@@ -11,7 +11,7 @@ std::shared_ptr<UserFunction> LoxClass::findMethod(const std::string& methodName
     if (it != methods.end()) return it->second;
 
     if (superclass) {
-        return superclass->findMethod(methodName); // not found locally — try the parent class
+        return superclass->findMethod(methodName); // not found locally - try the parent class
     }
 
     return nullptr;
@@ -22,6 +22,12 @@ int LoxClass::arity() const {
     auto* self = const_cast<LoxClass*>(this);
     auto initializer = self->findMethod("init");
     return initializer ? initializer->arity() : 0;
+}
+
+int LoxClass::maxArity() const {
+    auto* self = const_cast<LoxClass*>(this);
+    auto initializer = self->findMethod("init");
+    return initializer ? initializer->maxArity() : 0;
 }
 
 Value LoxClass::call(Interpreter& interpreter, std::vector<Value>& arguments) {

@@ -83,6 +83,7 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
     beginScope();
 
     consume(TokenType::LEFT_PAREN, anonymous ? "Expect '(' after 'def' in a function expression." : "Expect '(' after " + kind + " name.");
+    bool sawDefault = false;
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             function->arity++;
@@ -91,8 +92,28 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
             }
             consume(TokenType::IDENTIFIER, "Expect parameter name.");
             Token paramName = previous();
-            declareVariable(paramName);
-            markInitialized(); // a parameter's value is already sitting in its stack slot by the time the body runs (the caller pushed it as an argument) 
+            if (match(TokenType::EQUAL)) {
+                // A default value. The code below runs at the start of EVERY call, before the body: if the caller passed this argument, jump over it; otherwise compute the default and store it in the parameter's slot (slot = index + 1, since slot 0 is the callee). It is compiled BEFORE the parameter is declared, so it can use the parameters before it but not itself or later ones, the same as in the tree-walker.
+                sawDefault = true;
+                size_t parameterIndex = static_cast<size_t>(function->arity - 1);
+                emitByte(OpCode::OP_JUMP_IF_ARG);
+                emitByte(static_cast<uint8_t>(parameterIndex > 255 ? 255 : parameterIndex));
+                emitByte(0xFF); // placeholder high byte
+                emitByte(0xFF); // placeholder low byte
+                size_t skipPlaceholder = currentChunk().code.size() - 2;
+                expression();
+                declareVariable(paramName);
+                markInitialized();
+                emitByte(OpCode::OP_SET_LOCAL);
+                emitByte(static_cast<uint8_t>(parameterIndex + 1 > 255 ? 255 : parameterIndex + 1));
+                emitByte(OpCode::OP_POP);
+                patchJump(skipPlaceholder);
+            } else {
+                if (sawDefault) errorAt(previous(), "A parameter without a default can't follow one with a default.");
+                function->minArity = function->arity;
+                declareVariable(paramName);
+                markInitialized(); // a parameter's value is already sitting in its stack slot by the time the body runs (the caller pushed it as an argument) 
+            }
         } while (match(TokenType::COMMA));
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
@@ -109,7 +130,7 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
     // No endScope() call here
     functionStack.pop_back();
 
-    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
+    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE - not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
     emitConstantOp(OpCode::OP_CLOSURE, makeConstant(VMValue{function}));
     for (const UpvalueInfo& upvalue : capturedUpvalues) {
         emitByte(upvalue.isLocal ? 1 : 0);
@@ -240,7 +261,7 @@ void Compiler::declareVariable(const Token& name) {
 }
 
 void Compiler::markInitialized() {
-    if (current_().scopeDepth == 0) return; // no-op for globals — nothing to mark
+    if (current_().scopeDepth == 0) return; // no-op for globals - nothing to mark
     current_().locals.back().depth = current_().scopeDepth;
 }
 
@@ -265,12 +286,12 @@ int Compiler::resolveLocal(FunctionState& state, const Token& name) {
                       // relative to this function's OWN call frame
         }
     }
-    return -1; // not a local — caller falls back to treating it as a global
+    return -1; // not a local - caller falls back to treating it as a global
 }
 
 int Compiler::resolveUpvalue(int functionIndex, const Token& name) {
     if (functionIndex == 0) {
-        return -1; // no enclosing function — this IS the top-level script
+        return -1; // no enclosing function - this IS the top-level script
     }
     int enclosingIndex = functionIndex - 1; // functionStack is nested in compile order, so the immediately enclosing function is always right below this one
 
@@ -288,13 +309,13 @@ int Compiler::resolveUpvalue(int functionIndex, const Token& name) {
         return addUpvalue(functionIndex, static_cast<uint8_t>(upvalue), false);
     }
 
-    return -1; // not found anywhere outward either — caller treats it as a global
+    return -1; // not found anywhere outward either - caller treats it as a global
 }
 
 int Compiler::addUpvalue(int functionIndex, uint8_t index, bool isLocal) {
     auto& upvalues = functionStack[functionIndex].upvalues;
 
-    // Reuse an existing capture for the exact same (index, isLocal) pair if this function already captures it — avoids redundant duplicate upvalue slots
+    // Reuse an existing capture for the exact same (index, isLocal) pair if this function already captures it - avoids redundant duplicate upvalue slots
     for (size_t i = 0; i < upvalues.size(); i++) {
         if (upvalues[i].index == index && upvalues[i].isLocal == isLocal) {
             return static_cast<int>(i);
@@ -416,7 +437,7 @@ void Compiler::ifStatement() {
     // Unconditional jump at the END of the then-branch, to skip past the else-branch entirely
     size_t elseJump = emitJump(OpCode::OP_JUMP);
 
-    patchJump(thenJump); // NOW we know how far to jump if the condition was false — right here
+    patchJump(thenJump); // NOW we know how far to jump if the condition was false - right here
     emitByte(OpCode::OP_POP); // discard the (falsey) condition value before running the else-branch
 
     if (match(TokenType::ELSE)) {
@@ -517,7 +538,7 @@ void Compiler::forStatement() {
         return;
     }
 
-    // "for (init; cond; incr) body" — compiled directly to the equivalent jump/loop bytecode
+    // "for (init; cond; incr) body" - compiled directly to the equivalent jump/loop bytecode
     beginScope(); // so a "var i" in the init-clause is scoped to the loop, matching the tree-walker
 
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
@@ -550,13 +571,13 @@ void Compiler::forStatement() {
         size_t incrementStart = currentChunk().code.size();
 
         statementExpression(TokenType::RIGHT_PAREN); // the increment expression, e.g. "i = i + 1" or "i++"
-        emitByte(OpCode::OP_POP); // it's a bare expression — discard its unused result
+        emitByte(OpCode::OP_POP); // it's a bare expression - discard its unused result
 
         consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
 
         emitLoop(loopStart);      // after the increment, jump back to re-check the condition
         loopStart = incrementStart; // the BODY's end should now loop back to the increment, not the condition
-        patchJump(bodyJump);      // the jump we emitted above lands here — right before the body
+        patchJump(bodyJump);      // the jump we emitted above lands here - right before the body
     } else {
         consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
     }
@@ -757,7 +778,7 @@ void Compiler::binary(bool) {
 void Compiler::and_(bool) {
     // Short-circuit: if the left operand (already on the stack) is falsey, skip evaluating the right operand entirely and leave the falsey left value as the whole expression's result
     size_t endJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    emitByte(OpCode::OP_POP); // left was truthy — discard it, result becomes whatever the right side is
+    emitByte(OpCode::OP_POP); // left was truthy - discard it, result becomes whatever the right side is
     parsePrecedence(Precedence::AND);
     patchJump(endJump);
 }
@@ -1101,8 +1122,7 @@ void Compiler::errorAt(const Token& token, const std::string& message) {
 // bytecode emission
 
 int Compiler::currentLine() const {
-    // previous() is the token most recently consumed — attributing
-    // emitted bytecode to it gives reasonable line numbers for errors.
+    // previous() is the token most recently consumed - attributing emitted bytecode to it gives reasonable line numbers for errors.
     return current > 0 ? tokens[current - 1].line : 0;
 }
 

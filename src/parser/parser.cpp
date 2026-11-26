@@ -4,9 +4,10 @@
 // program     -> declaration* EOF
 // declaration -> classDecl | funDecl | varDecl | statement
 // classDecl   -> "class" IDENTIFIER "{" function* "}"
-// function    -> IDENTIFIER "(" parameters? ")" block   (a method — no "def" keyword)
+// function    -> IDENTIFIER "(" parameters? ")" block   (a method - no "def" keyword)
 // funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
-// parameters  -> IDENTIFIER ( "," IDENTIFIER )*
+// parameters  -> parameter ( "," parameter )*      (a parameter with a default may only be followed by parameters with defaults)
+// parameter   -> IDENTIFIER ( "=" expression )?
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 // statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
@@ -113,12 +114,21 @@ ExprPtr Parser::functionExpression() {
 
 std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string& kind) {
     std::vector<Token> params;
+    std::vector<ExprPtr> defaults;
+    bool sawDefault = false;
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             if (params.size() >= 255) {
                 error(peek(), "Can't have more than 255 parameters.");
             }
             params.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name."));
+            if (match({TokenType::EQUAL})) {
+                sawDefault = true;
+                defaults.push_back(expression()); // evaluated at each call that leaves this argument out
+            } else {
+                if (sawDefault) error(previous(), "A parameter without a default can't follow one with a default.");
+                defaults.push_back(nullptr);
+            }
         } while (match({TokenType::COMMA}));
     }
     consume(TokenType::RIGHT_PAREN, "Expect ')' after parameters.");
@@ -127,7 +137,7 @@ std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string
     DepthGuard noLoop(loopDepth, 0); // a loop outside this function does not make `break` legal inside it
     std::vector<StmtPtr> body = block();
 
-    return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(body));
+    return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(defaults), std::move(body));
 }
 
 StmtPtr Parser::functionDeclaration() {

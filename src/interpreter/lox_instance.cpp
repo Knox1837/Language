@@ -1,4 +1,4 @@
-// lox_instance.cpp — property get/set on a runtime object.
+// lox_instance.cpp - property get/set on a runtime object.
 #include "lox_instance.h"
 #include "lox_class.h"
 #include "environment.h" // for RuntimeError

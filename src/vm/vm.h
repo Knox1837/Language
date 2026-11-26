@@ -24,6 +24,7 @@ struct CallFrame {
     size_t ip = 0;          // instruction pointer, an index into closure->function->chunk.code
     size_t stackBase = 0;   // index into VM::stack where THIS call's slot 0 begins
     std::shared_ptr<VMModule> importedModule; // set only on the frame that runs an imported file's top-level code: when it returns, the module (not nil) is the result, and it is cached
+    int argCount = 0;       // how many arguments the call passed (the missing ones were padded with nil; OP_JUMP_IF_ARG uses this to tell which parameters need their default)
 };
 
 class VM {

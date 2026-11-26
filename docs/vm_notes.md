@@ -1649,3 +1649,37 @@ and map contents, "Undefined map key" messages) therefore agrees.
   trailing zeros and gain their real digits; whole numbers of 9e18 and up
   used to print through `%f` (VM) or an out-of-range cast (tree-walker) and
   now print as above.
+
+## Design note: default parameters
+
+Both engines evaluate a default at call time, in the callee, and both give
+the same arity range (`Callable::arity()` / `maxArity()` in the tree-walker,
+`VMFunction::minArity` / `arity` in the VM). The parser stores one optional
+expression per parameter (`FunctionStmt::defaults`, `nullptr` for a required
+one); required parameters must come first.
+
+- **Tree-walker.** `UserFunction::arity()` is the required count and
+  `maxArity()` the parameter count, so the existing range check in the call
+  expression and in `array_callbacks.h` needs no change (`LoxClass` forwards
+  both from `init()`). `UserFunction::run` binds the passed arguments, and for
+  each missing one evaluates its default with the new `Interpreter::evaluateIn`
+  in the call's own scope, which already holds the parameters bound so far.
+- **VM.** `VM::call` accepts `minArity..arity` arguments and pads the missing
+  ones with `nil` so every parameter has its stack slot, and it records how many
+  were really passed in `CallFrame::argCount`. For each parameter with a default
+  the compiler emits, at the start of the function body:
+  `OP_JUMP_IF_ARG i, skip` / default expression / `OP_SET_LOCAL i+1` /
+  `OP_POP` / `skip:`. A passed argument jumps over the code; a missing one
+  runs it and overwrites the placeholder. Nothing is added to the value type,
+  so there is no "missing" value that could leak out of a function, and the
+  collector needs no change.
+- **Scope of a default.** It is compiled (VM) or evaluated (tree-walker)
+  before its own parameter exists, so it sees the parameters before it and
+  nothing at or after it; `def f(a = a)` reads an outer `a`. The two engines
+  resolve this the same way.
+- **Cost.** A function with no defaults compiles to exactly the same code as
+  before, and its call does one extra comparison (`argCount < minArity`) and
+  no padding. Only a call that leaves arguments out pays for the prologue.
+- **Why not a `nil` sentinel.** Desugaring `b = 2` into `if (b == nil) b = 2`
+  in the parser would be simpler but would make an explicit `nil` argument
+  trigger the default, and it would still need a separate arity range.

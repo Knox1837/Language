@@ -30,7 +30,7 @@ struct FunctionExpr; // defined in stmt.h, next to FunctionStmt, because it owns
 // Runtime literal value: number, string, bool, or nil (monostate)
 using LiteralValue = std::variant<std::monostate, double, bool, std::string>;
 
-// Visitor interface — one visit method per expression type.
+// Visitor interface - one visit method per expression type.
 struct ExprVisitor {
     virtual void visitBinaryExpr(Binary& expr) = 0;
     virtual void visitGroupingExpr(Grouping& expr) = 0;

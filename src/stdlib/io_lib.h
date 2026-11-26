@@ -1,6 +1,6 @@
 #pragma once
-// io_lib.h — input(): reads one line from stdin as a string. 
-// To show a prompt, print it yourself first (this language has no default/optional parameters, so a single fixed-arity input() is simplest).
+// io_lib.h - input(): reads one line from stdin as a string. 
+// To show a prompt, print it yourself first (a single fixed-arity input() is simplest, even though user functions can have default parameters).
 #include <memory>
 #include "../interpreter/environment.h"
 

@@ -32,7 +32,7 @@ enum class OpCode : uint8_t {
     OP_CLOSURE,        // reads a VMFunction constant (operand: its constant-pool index), then reads `function->upvalueCount` more (isLocal, index) byte-pairs describing how to capture each upvalue, builds a VMClosure, and pushes it
     OP_GET_UPVALUE,    // push a COPY of the value the current closure's upvalues[operand] refers to
     OP_SET_UPVALUE,    // peek (don't pop) the top of stack, store it into the current closure's upvalues[operand]
-    OP_CLOSE_UPVALUE,  // "closes" the upvalue (if any) referring to the CURRENT top-of-stack slot - copies its value out of the stack into heap-owned storage so it survives after this slot is popped/reused — then pops that slot. Emitted instead of a plain OP_POP specifically for a local that some closure captured.
+    OP_CLOSE_UPVALUE,  // "closes" the upvalue (if any) referring to the CURRENT top-of-stack slot - copies its value out of the stack into heap-owned storage so it survives after this slot is popped/reused - then pops that slot. Emitted instead of a plain OP_POP specifically for a local that some closure captured.
     OP_RETURN,         // pop the return value, close any of the current call's still-open upvalues, pop the current CallFrame, resume the caller with that return value pushed onto ITS stack. At the top level (no caller), this means the program is done.
     OP_ARRAY,          // operand: a 2-byte element count N. Pops the top N values (in the order they were pushed), builds an array from them, pushes it
     OP_GET_INDEX,      // pop index, pop object, push object[index]: an array (numeric index, must be in range) or a map (string key, must exist)
@@ -58,4 +58,5 @@ enum class OpCode : uint8_t {
     OP_CALL_FINALLY,   // operand: a 2-byte forward offset to a `finally` block, which is compiled ONCE as a subroutine. Pushes the address of the next instruction as a number (the return address) and jumps. Every way out of a try that has a finally (falling off the end, break, continue, return, and an error that was caught for it) calls the block this way
     OP_END_FINALLY,    // the last instruction of a `finally` subroutine: pops the return address OP_CALL_FINALLY pushed and jumps back to it
     OP_RETHROW,        // after a finally block that ran because of an error: raises that error again, with the line, kind and stack trace it had when it was first raised. The error was stored in two of the try's three hidden stack slots (its value and an info map), which are the top two values on the stack here
+    OP_JUMP_IF_ARG,    // operands: one byte, a parameter index i (0 for the first), then a 2-byte forward offset. If the call passed an argument for parameter i, jumps ahead by the offset; otherwise falls through into the code that computes the parameter's default. Emitted only at the start of a function that has default parameters
 };

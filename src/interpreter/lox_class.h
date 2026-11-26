@@ -1,4 +1,4 @@
-// lox_class.h — the runtime representation of a `class Name { ... }` declaration.
+// lox_class.h - the runtime representation of a `class Name { ... }` declaration.
 // A LoxClass IS a Callable: calling it (Counter()) is what constructs a new instance and runs init() if one is defined.
 #pragma once
 #include <string>
@@ -18,6 +18,7 @@ public:
     std::shared_ptr<UserFunction> findMethod(const std::string& methodName);
 
     int arity() const override;   // arity of init() if defined, else 0
+    int maxArity() const override; // most init() accepts, else 0
     Value call(Interpreter& interpreter, std::vector<Value>& arguments) override; // constructs an instance
     std::string toString() const override;
 

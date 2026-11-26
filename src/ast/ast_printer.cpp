@@ -214,6 +214,7 @@ void ASTPrinter::visitFunctionStmt(FunctionStmt& stmt) {
     for (size_t i = 0; i < stmt.params.size(); i++) {
         if (i > 0) out << " ";
         out << stmt.params[i].lexeme;
+        if (stmt.defaults[i]) out << "=" << print(*stmt.defaults[i]);
     }
     out << ") ";
     for (auto& s : stmt.body) {

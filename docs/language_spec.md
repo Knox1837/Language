@@ -184,7 +184,8 @@ classDecl   -> "class" IDENTIFIER ( "<" IDENTIFIER )? "{" method* "}"
 method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 funExpr     -> "def" "(" parameters? ")" block
-parameters  -> IDENTIFIER ( "," IDENTIFIER )*
+parameters  -> parameter ( "," parameter )*
+parameter   -> IDENTIFIER ( "=" expression )?
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
              | breakStmt | continueStmt | tryStmt | block
@@ -407,6 +408,41 @@ var counter = makeCounter();
 print counter(); // 1
 print counter(); // 2
 ```
+
+## Default parameters
+
+A parameter can have a default value, written `name = expression`. The caller
+may leave that argument out, and the default is used instead:
+
+```
+def greet(name, greeting = "Hello") {
+    return greeting + ", " + name;
+}
+print greet("Ada");            // Hello, Ada
+print greet("Ada", "Hi");      // Hi, Ada
+```
+
+- **Required parameters come first.** Once a parameter has a default, every
+  parameter after it needs one too: `def f(a = 1, b)` is the syntax error
+  `A parameter without a default can't follow one with a default.`
+- **The default is evaluated at each call that needs it,** not once when the
+  function is defined. So `def f(items = [])` gives every call its own new array
+  (no value is shared between calls), and a default that reads a variable sees
+  that variable's value at the time of the call.
+- **A default can use the parameters before it:** `def box(w, h = w)` makes a
+  square when `h` is left out. It cannot use itself or a parameter after it
+  (the name then means whatever it means outside the function, if anything).
+- **Only an argument that is left out triggers the default.** Passing `nil`
+  passes `nil`.
+- **Argument counts become a range.** `def f(a, b = 2, c = 3)` accepts 1 to 3
+  arguments; any other count is `Expected 1 to 3 arguments but got 4.` (with
+  exactly one optional parameter the message reads `Expected 1 or 2 arguments
+  but got 3.`). The same holds for methods and `init()`, so a class whose
+  `init(x, y = 0)` is called as `P(5)` works. Function expressions
+  (`def(x, y = 1) { ... }`) take defaults too.
+- **Callbacks:** `map`, `filter`, `reduce` and `sort` still pass the same
+  number of arguments, so a callback with defaults works as long as that number
+  is within its range: `map(xs, def(v, scale = 10) { return v * scale; })`.
 
 ## Function expressions
 
@@ -711,7 +747,8 @@ comparator). Each also works as a method: `arr.map(f)`, `arr.filter(f)`,
   bound method (`map(xs, obj.scale)`).
 - `map` and `filter` call it with one argument (the element); `reduce` with two
   (the accumulator, then the element); a `sort` comparator with two elements.
-  A function that takes a different number of parameters is the usual error:
+  A function whose range of accepted argument counts (see Default parameters)
+  does not include that number is the usual error:
   `Expected 2 arguments but got 1.`
 - `filter` uses the language's truthiness (see Truthiness): only `false` and
   `nil` drop an element, so a callback that returns `0` keeps it.

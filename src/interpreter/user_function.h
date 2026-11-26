@@ -11,17 +11,17 @@ class UserFunction : public Callable, public std::enable_shared_from_this<UserFu
 public:
     UserFunction(FunctionStmt* declaration, std::shared_ptr<Environment> closure, bool isInitializer = false);
 
-    int arity() const override;
+    int arity() const override;    // the REQUIRED parameters (those without a default)
+    int maxArity() const override; // all parameters
     Value call(Interpreter& interpreter, std::vector<Value>& arguments) override;
     Value run(Interpreter& interpreter, std::vector<Value>& arguments); // the body of call(), without the stack-trace bookkeeping
     std::string toString() const override;
 
-    // Produces a copy of this function whose closure has `this` bound to the given instance
-    // used when a method is looked up on an instance (obj.method), so the method body can reference `this`.
+    // Produces a copy of this function whose closure has `this` bound to the given instance used when a method is looked up on an instance (obj.method), so the method body can reference `this`.
     std::shared_ptr<UserFunction> bind(std::shared_ptr<LoxInstance> instance);
 
 private:
     FunctionStmt* declaration; // see FunctionStmt's comment in stmt.h re: lifetime
     std::shared_ptr<Environment> closure; // the scope active where this function was defined
-    bool isInitializer; // true for a class's init() method — always returns `this`, even on bare "return;"
+    bool isInitializer; // true for a class's init() method - always returns `this`, even on bare "return;"
 };

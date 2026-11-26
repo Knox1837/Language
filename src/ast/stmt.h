@@ -97,13 +97,20 @@ struct WhileStmt : Stmt {
     void accept(StmtVisitor& visitor) override { visitor.visitWhileStmt(*this); }
 };
 
-// def name(param1, param2) { body }
+// def name(param1, param2 = default) { body }
+// `defaults` is as long as `params`: defaults[i] is the expression for params[i], or nullptr for a required parameter. Required parameters always come first, so the first `requiredCount()` entries are nullptr and the rest are not.
 struct FunctionStmt : Stmt {
     Token name;
     std::vector<Token> params;
+    std::vector<ExprPtr> defaults;
     std::vector<StmtPtr> body;
-    FunctionStmt(Token name, std::vector<Token> params, std::vector<StmtPtr> body)
-        : name(std::move(name)), params(std::move(params)), body(std::move(body)) {}
+    FunctionStmt(Token name, std::vector<Token> params, std::vector<ExprPtr> defaults, std::vector<StmtPtr> body)
+        : name(std::move(name)), params(std::move(params)), defaults(std::move(defaults)), body(std::move(body)) {}
+    int requiredCount() const {
+        int required = 0;
+        while (required < static_cast<int>(defaults.size()) && !defaults[required]) required++;
+        return required;
+    }
     void accept(StmtVisitor& visitor) override { visitor.visitFunctionStmt(*this); }
 };
 

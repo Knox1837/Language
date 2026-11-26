@@ -23,7 +23,7 @@ Interpreter::Interpreter() {
     registerStdlib(environment); // clock, abs, sqrt, len, upper, input, etc.
 }
 
-Interpreter::~Interpreter() = default; // must live here, not the header — see interpreter.h's comment
+Interpreter::~Interpreter() = default; // must live here, not the header - see interpreter.h's comment
 
 void Interpreter::setModuleBaseDir(const std::string& dir) {
     moduleLoader = std::make_shared<ModuleLoader>(dir);
@@ -91,6 +91,19 @@ void Interpreter::executeBlock(const std::vector<StmtPtr>& statements, std::shar
         throw;
     }
     environment = previous;
+}
+
+Value Interpreter::evaluateIn(Expr& expr, std::shared_ptr<Environment> env) {
+    std::shared_ptr<Environment> previous = environment;
+    environment = std::move(env);
+    try {
+        Value value = evaluate(expr);
+        environment = previous;
+        return value;
+    } catch (...) {
+        environment = previous;
+        throw;
+    }
 }
 
 // expressions

@@ -337,15 +337,18 @@ bool VM::callFunction(const VMValue& callee, const std::vector<VMValue>& args, V
 }
 
 bool VM::call(std::shared_ptr<VMClosure> closure, int argCount) {
-    if (argCount != closure->function->arity) {
-        std::ostringstream msg;
-        msg << "Expected " << closure->function->arity << " arguments but got " << argCount << ".";
-        runtimeError(msg.str());
+    if (argCount < closure->function->minArity || argCount > closure->function->arity) {
+        runtimeError(arityMessage(closure->function->minArity, closure->function->arity, argCount));
         return false;
     }
 
+    // Arguments left out (they have defaults) get a nil placeholder so every parameter has its stack slot. The function's first instructions replace the placeholder with the default value (see OP_JUMP_IF_ARG), using `argCount` below to tell which ones were really passed.
+    for (int missing = argCount; missing < closure->function->arity; missing++) push(VMValue{});
+
     // stackBase points AT the callee value itself (slot 0), with arguments starting at slot 1. this matches the compiler reserving local slot 0 for the callee in EVERY function
-    frames.push_back(CallFrame{closure, 0, stack.size() - argCount - 1, nullptr});
+    CallFrame frame{closure, 0, stack.size() - closure->function->arity - 1, nullptr};
+    frame.argCount = argCount;
+    frames.push_back(std::move(frame));
     return true;
 }
 
@@ -556,6 +559,14 @@ InterpretResult VM::runLoop(size_t baseFrames) {
             case OpCode::OP_JUMP: {
                 uint16_t offset = readShort();
                 currentFrame().ip += offset;
+                break;
+            }
+            case OpCode::OP_JUMP_IF_ARG: {
+                uint8_t parameter = readByte();
+                uint16_t offset = readShort();
+                if (currentFrame().argCount > parameter) {
+                    currentFrame().ip += offset; // the caller passed this one: keep it
+                }
                 break;
             }
             case OpCode::OP_JUMP_IF_FALSE: {

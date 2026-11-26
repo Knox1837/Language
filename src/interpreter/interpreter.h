@@ -37,6 +37,9 @@ public:
     // Public because UserFunction::call() needs it to run a function body in a scope chained to the function's closure, not the caller's scope.
     void executeBlock(const std::vector<StmtPtr>& statements, std::shared_ptr<Environment> newEnv);
 
+    // Evaluates one expression with `env` as the current scope, then restores the previous scope (also when an error passes through). UserFunction uses it to evaluate default parameter values in the call's own scope.
+    Value evaluateIn(Expr& expr, std::shared_ptr<Environment> env);
+
     // expression visitors: each computes a Value and stores it in `result`
     void visitBinaryExpr(Binary& expr) override;
     void visitGroupingExpr(Grouping& expr) override;
