@@ -857,8 +857,8 @@ change to `tim_sort.h`.
 Both engines implement them with the same rules (see "Break and continue" in
 `language_spec.md`): they target the innermost loop of the CURRENT function,
 and using one outside a loop is the compile/parse error "Can't use 'break'
-outside of a loop." (a function declared inside a loop starts with no
-enclosing loop).
+outside of a loop or switch." (a function declared inside a loop starts with no
+enclosing loop or switch).
 
 **Compiler (VM).** Each `FunctionState` has a stack of `LoopInfo`
 (`compiler.h`), pushed for the body of every `while` and `for`:
@@ -1683,3 +1683,37 @@ one); required parameters must come first.
 - **Why not a `nil` sentinel.** Desugaring `b = 2` into `if (b == nil) b = 2`
   in the parser would be simpler but would make an explicit `nil` argument
   trigger the default, and it would still need a separate arity range.
+
+## Design note: switch
+
+`switch (x) { case a, b: ... default: ... }` has no fall-through, so a
+clause is "match, run its body, leave", and `break` is only an early exit.
+
+- **Parser / tree-walker.** `SwitchStmt` holds the subject and a list of
+  `SwitchClause` (values, body, `isDefault`). `Interpreter::visitSwitchStmt`
+  evaluates the subject once, walks the clauses in order comparing with
+  `isEqual` (each value evaluated only when reached), falls back to the
+  `default` clause, and runs the chosen body with `executeBlock` in a fresh
+  scope. `break` reuses the loop signal: the switch clears `BREAK` after its
+  body and leaves `CONTINUE` set for the enclosing loop. The parser keeps a
+  `switchDepth` next to `loopDepth` (both reset at a function boundary):
+  `break` is legal when either is nonzero, `continue` only with a loop.
+- **VM.** The subject stays on the stack as a hidden local (`" subject"`, a
+  name no program can write) in its own scope. Per value the compiler emits
+  `OP_GET_LOCAL subject`, the value, `OP_EQUAL`, `OP_JUMP_IF_FALSE`; a match
+  pops the result and jumps to the clause body, a miss pops it and tries the
+  next value, and when every value missed the body is jumped over. Each body
+  ends with a jump to the end of the switch. No new opcode was needed.
+- **`break` and `continue` in the VM.** The switch pushes a `LoopInfo` with
+  `isSwitch = true` and the scope depth of its subject. `break` takes the
+  innermost entry, so it pops the clause's locals (and leaves any `try`,
+  running a `finally`) and jumps to the end of the switch, where the subject
+  is popped. `continue` skips switch entries and targets the innermost real
+  loop, which pops the subject too.
+- **Why `default` must be last.** The VM emits the clause bodies in source
+  order, with each failed clause skipping to the next; a `default` in the
+  middle would need a second pass or a jump table. Last is also how nearly
+  everyone writes it.
+- **New reserved words.** `switch`, `case` and `default` are keywords now, so
+  a program that used one of them as a variable or function name no longer
+  parses.

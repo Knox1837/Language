@@ -46,11 +46,11 @@ var b = /* or in the middle of a line */ 2;
 and       else      false     for       if        nil
 or        print     return    true      var       while     def
 class     this      super     import    as        break     continue
-in        try       catch
+in        try       catch     switch    case      default
 ```
 
-`in`, `try`, `catch` and `finally` are reserved, so they can no longer be used as variable
-or function names.
+`in`, `try`, `catch`, `finally`, `switch`, `case` and `default` are reserved, so they can no
+longer be used as variable or function names.
 
 ## Data types
 
@@ -187,9 +187,11 @@ funExpr     -> "def" "(" parameters? ")" block
 parameters  -> parameter ( "," parameter )*
 parameter   -> IDENTIFIER ( "=" expression )?
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
-statement   -> exprStmt | printStmt | ifStmt | whileStmt | forStmt | returnStmt
+statement   -> exprStmt | printStmt | ifStmt | switchStmt | whileStmt | forStmt | returnStmt
              | breakStmt | continueStmt | tryStmt | block
 ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
+switchStmt  -> "switch" "(" expression ")" "{" clause* "}"
+clause      -> ( "case" expression ( "," expression )* | "default" ) ":" declaration*
 whileStmt   -> "while" "(" expression ")" statement
 forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" incrementClause? ")" statement
              | "for" "(" "var" IDENTIFIER "in" expression ")" statement
@@ -347,7 +349,8 @@ for (var i, c in "hi") print str(i) + ":" + c;            // 0:h, then 1:i
 
 ## Break and continue
 
-`break;` leaves the innermost enclosing `while`, `for` or for-in loop immediately.
+`break;` leaves the innermost enclosing `while`, `for` or for-in loop (or `switch`,
+see "Switch") immediately.
 `continue;` skips the rest of the current iteration of the innermost enclosing
 loop and starts the next one:
 
@@ -374,10 +377,49 @@ while (true) {
 - A loop does not extend into a function declared inside it: `break` or
   `continue` inside a `def` (or a method) that is itself inside a loop, but not
   inside a loop of its own, is an error.
-- Using either outside a loop is a syntax error: `Can't use 'break' outside of
-  a loop.` (or `'continue'`). The VM refuses to run the program; the
-  tree-walking interpreter reports the error and runs the rest, as it does for
-  any syntax error.
+- Using `continue` outside a loop is a syntax error: `Can't use 'continue'
+  outside of a loop.` For `break` the error is `Can't use 'break' outside of a
+  loop or switch.` The VM refuses to run the program; the tree-walking
+  interpreter reports the error and runs the rest, as it does for any syntax
+  error.
+
+## Switch
+
+```
+switch (command) {
+    case "start":
+        print "starting";
+    case "stop", "halt":          // several values share one clause
+        print "stopping";
+    default:
+        print "unknown command";
+}
+```
+
+- **The subject is evaluated once.** The `case` values are then compared to it
+  with `==`, in order, and each one is evaluated only when it is reached, so
+  `case 5, 1, f():` never calls `f()` when the subject is `1`. A case value can
+  be any expression. There is no conversion between types: `1` does not match
+  `"1"`, and `true` does not match `1`.
+- **There is no fall-through.** Only the first matching clause runs, and then
+  the switch ends. To give two values the same code, list both after one
+  `case`. A clause may have no statements at all.
+- **`default` runs when nothing matched** and must be the last clause. If there
+  is no `default` and nothing matches, the switch does nothing.
+- **Each clause is its own scope.** A variable declared in a clause is not
+  visible in the next one or after the switch, and a closure can capture it
+  like any other local.
+- **`break` leaves the switch,** and the code after the switch runs next. In a
+  clause it is optional, since the clause ends anyway, but it lets you leave
+  early. **`continue` is not about the switch:** it goes on to the next
+  iteration of the enclosing loop, and it is a syntax error when there is no
+  loop around the switch.
+- **`return`, errors and `try`/`finally`** inside a clause behave as anywhere
+  else: `break` out of a `try` inside a clause still runs its `finally`.
+- **Syntax errors:** a stray statement before the first `case` is
+  `Expect 'case' or 'default' in switch body.`, a second `default` or a clause
+  after `default` is `'default' must be the last clause in a switch.`, and a
+  missing colon is `Expect ':' after case value.` (or `after 'default'`).
 
 ## Functions
 
