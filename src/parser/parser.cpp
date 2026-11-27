@@ -4,12 +4,14 @@
 // program     -> declaration* EOF
 // declaration -> classDecl | funDecl | varDecl | statement
 // classDecl   -> "class" IDENTIFIER "{" function* "}"
-// function    -> IDENTIFIER "(" parameters? ")" block   (a method - no "def" keyword)
+// function    -> IDENTIFIER "(" parameters? ")" block   (a method — no "def" keyword)
 // funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 // parameters  -> parameter ( "," parameter )*      (a parameter with a default may only be followed by parameters with defaults)
 // parameter   -> IDENTIFIER ( "=" expression )?
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 // statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
+// switchStmt  -> "switch" "(" expression ")" "{" clause* "}"
+// clause      -> ( "case" expression ( "," expression )* | "default" ) ":" declaration*     (no fall-through; "default" must be last)
 // ifStmt      -> "if" "(" expression ")" statement ( "else" statement )?
 // whileStmt   -> "while" "(" expression ")" statement
 // forStmt     -> "for" "(" ( varDecl | exprStmt | ";" ) expression? ";" expression? ")" statement (desugars to a whileStmt; no dedicated AST node) | "for" "(" "var" IDENTIFIER ( "," IDENTIFIER )? "in" expression ")" statement   (a for-in loop; has its own ForInStmt node)
@@ -135,6 +137,7 @@ std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string
 
     consume(TokenType::LEFT_BRACE, "Expect '{' before " + kind + " body.");
     DepthGuard noLoop(loopDepth, 0); // a loop outside this function does not make `break` legal inside it
+    DepthGuard noSwitch(switchDepth, 0); // nor does a switch
     std::vector<StmtPtr> body = block();
 
     return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(defaults), std::move(body));
@@ -159,6 +162,7 @@ StmtPtr Parser::varDeclaration() {
 StmtPtr Parser::statement() {
     if (match({TokenType::PRINT})) return printStatement();
     if (match({TokenType::IF})) return ifStatement();
+    if (match({TokenType::SWITCH})) return switchStatement();
     if (match({TokenType::WHILE})) return whileStatement();
     if (match({TokenType::FOR})) return forStatement();
     if (match({TokenType::RETURN})) return returnStatement();
@@ -189,6 +193,42 @@ StmtPtr Parser::ifStatement() {
     }
 
     return std::make_unique<IfStmt>(std::move(condition), std::move(thenBranch), std::move(elseBranch));
+}
+
+StmtPtr Parser::switchStatement() {
+    Token keyword = previous();
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'switch'.");
+    ExprPtr subject = expression();
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after switch value.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before switch body.");
+
+    DepthGuard inSwitch(switchDepth, switchDepth + 1); // `break` is legal in the clauses; loopDepth is left alone so `continue` still needs a loop around the switch
+    std::vector<SwitchClause> clauses;
+    bool sawDefault = false;
+    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+        if (sawDefault && (check(TokenType::CASE) || check(TokenType::DEFAULT))) {
+            error(peek(), "'default' must be the last clause in a switch."); // reported, not thrown, so the rest of the switch still parses
+        }
+        SwitchClause clause;
+        if (match({TokenType::CASE})) {
+            do {
+                clause.values.push_back(expression());
+            } while (match({TokenType::COMMA}));
+            consume(TokenType::COLON, "Expect ':' after case value.");
+        } else if (match({TokenType::DEFAULT})) {
+            clause.isDefault = true;
+            sawDefault = true;
+            consume(TokenType::COLON, "Expect ':' after 'default'.");
+        } else {
+            throw error(peek(), "Expect 'case' or 'default' in switch body.");
+        }
+        while (!check(TokenType::CASE) && !check(TokenType::DEFAULT) && !check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+            clause.body.push_back(declaration());
+        }
+        clauses.push_back(std::move(clause));
+    }
+    consume(TokenType::RIGHT_BRACE, "Expect '}' after switch body.");
+    return std::make_unique<SwitchStmt>(std::move(keyword), std::move(subject), std::move(clauses));
 }
 
 StmtPtr Parser::whileStatement() {
@@ -324,9 +364,9 @@ StmtPtr Parser::returnStatement() {
 StmtPtr Parser::breakStatement() {
     Token keyword = previous();
     consume(TokenType::SEMICOLON, "Expect ';' after 'break'.");
-    if (loopDepth == 0) {
+    if (loopDepth == 0 && switchDepth == 0) {
         // Reported but NOT thrown: unwinding would make synchronize() skip tokens (including the closing brace of the enclosing block) and produce a second, confusing error. An empty block takes the statement's place, so a surrounding `if` or loop body is never null.
-        error(keyword, "Can't use 'break' outside of a loop.");
+        error(keyword, "Can't use 'break' outside of a loop or switch.");
         return std::make_unique<BlockStmt>(std::vector<StmtPtr>{});
     }
     return std::make_unique<BreakStmt>(std::move(keyword));

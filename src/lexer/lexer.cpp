@@ -15,6 +15,7 @@ const std::unordered_map<std::string, TokenType> Lexer::keywords = {
     {"print", TokenType::PRINT}, {"class", TokenType::CLASS}, {"this", TokenType::THIS},
     {"super", TokenType::SUPER},
     {"import", TokenType::IMPORT}, {"as", TokenType::AS}, {"in", TokenType::IN}, {"try", TokenType::TRY}, {"catch", TokenType::CATCH}, {"finally", TokenType::FINALLY},
+    {"switch", TokenType::SWITCH}, {"case", TokenType::CASE}, {"default", TokenType::DEFAULT},
 };
 
 Lexer::Lexer(std::string source) : source(std::move(source)) {}

@@ -23,6 +23,7 @@ private:
     std::vector<Token> tokens;
     std::string sourceDir;
     int current = 0;
+    int switchDepth = 0; // how many switch bodies enclose the current position inside the current function: `break` is legal inside one even with no loop around it, `continue` is not
     int loopDepth = 0; // how many loop BODIES enclose the current position inside the current function; 0 means `break`/`continue` are not allowed here
 
     // statement grammar rules
@@ -37,6 +38,7 @@ private:
     StmtPtr statement();        // dispatches to printStmt/ifStmt/whileStmt/returnStmt/block/exprStmt
     StmtPtr printStatement();   // "print" expression ";"
     StmtPtr ifStatement();      // "if" "(" expression ")" statement ("else" statement)?
+    StmtPtr switchStatement();
     StmtPtr whileStatement();   // "while" "(" expression ")" statement
     StmtPtr forStatement();     // "for" "(" (varDecl|exprStmt|";") expression? ";" expression? ")" statement -- desugars to a whileStmt
     StmtPtr returnStatement();  // "return" expression? ";"

@@ -178,6 +178,22 @@ void ASTPrinter::visitWhileStmt(WhileStmt& stmt) {
     out << ")";
     result = out.str();
 }
+void ASTPrinter::visitSwitchStmt(SwitchStmt& stmt) {
+    std::ostringstream out;
+    out << "(switch " << print(*stmt.subject);
+    for (const SwitchClause& clause : stmt.clauses) {
+        out << (clause.isDefault ? " (default" : " (case");
+        for (const ExprPtr& value : clause.values) out << " " << print(*value);
+        for (const StmtPtr& body : clause.body) {
+            if (!body) continue;
+            body->accept(*this);
+            out << " " << result;
+        }
+        out << ")";
+    }
+    out << ")";
+    result = out.str();
+}
 void ASTPrinter::visitBreakStmt(BreakStmt&) {
     result = "(break)";
 }

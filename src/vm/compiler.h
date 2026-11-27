@@ -29,6 +29,7 @@ struct LoopInfo {
     size_t continueTarget;             // where `continue` jumps back to: the condition for a while loop, the increment clause for a for loop that has one
     std::vector<size_t> breakJumps;    // forward jumps emitted by `break`, patched to land just after the loop
     int tryDepth = 0;                  // how many try bodies were open when the loop began: a break/continue inside the body unregisters the handlers of every try it leaves (those deeper than this)
+    bool isSwitch = false;             // this entry is a switch, not a loop: `break` targets it, `continue` skips past it to the enclosing loop (continueTarget is unused)
 };
 
 // One try statement WITH a finally that is being compiled, so every way of leaving it (break, continue, return) knows to run the finally block on the way out. The finally block is compiled once, as a subroutine after the try and catch code, and each exit calls it with OP_CALL_FINALLY.
@@ -120,6 +121,8 @@ private:
     void beginScope();
     void endScope();
     void ifStatement();
+    void switchStatement();
+    void switchClauseBody();  // the statements of one case/default clause, in their own scope
     void whileStatement();
     void breakStatement();    // "break" ";"     -> discard the body's locals, jump past the loop
     void continueStatement(); // "continue" ";" -> discard the body's locals, jump to the next iteration

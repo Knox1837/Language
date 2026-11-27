@@ -23,7 +23,7 @@ Interpreter::Interpreter() {
     registerStdlib(environment); // clock, abs, sqrt, len, upper, input, etc.
 }
 
-Interpreter::~Interpreter() = default; // must live here, not the header - see interpreter.h's comment
+Interpreter::~Interpreter() = default; // must live here, not the header — see interpreter.h's comment
 
 void Interpreter::setModuleBaseDir(const std::string& dir) {
     moduleLoader = std::make_shared<ModuleLoader>(dir);
@@ -384,6 +384,25 @@ void Interpreter::visitWhileStmt(WhileStmt& stmt) {
         loopSignal = LoopSignal::NONE; // CONTINUE (or nothing): carry on with the next iteration
         if (stmt.increment) evaluate(*stmt.increment); // a for-loop's increment runs after every iteration, including one ended by `continue`
     }
+}
+void Interpreter::visitSwitchStmt(SwitchStmt& stmt) {
+    Value subject = evaluate(*stmt.subject); // once
+    const SwitchClause* chosen = nullptr;
+    for (const SwitchClause& clause : stmt.clauses) {
+        if (clause.isDefault) continue;
+        for (const ExprPtr& value : clause.values) {
+            if (isEqual(subject, evaluate(*value))) { chosen = &clause; break; } // case values are evaluated in order, and only until one matches
+        }
+        if (chosen) break;
+    }
+    if (!chosen) {
+        for (const SwitchClause& clause : stmt.clauses) {
+            if (clause.isDefault) { chosen = &clause; break; }
+        }
+    }
+    if (!chosen) return;
+    executeBlock(chosen->body, std::make_shared<Environment>(environment)); // each clause has its own scope
+    if (loopSignal == LoopSignal::BREAK) loopSignal = LoopSignal::NONE; // `break` leaves the switch; a `continue` stays set for the enclosing loop
 }
 void Interpreter::visitBreakStmt(BreakStmt&) {
     loopSignal = LoopSignal::BREAK;

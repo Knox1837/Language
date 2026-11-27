@@ -19,6 +19,7 @@ struct BreakStmt;
 struct ContinueStmt;
 struct ForInStmt;
 struct TryStmt;
+struct SwitchStmt;
 
 struct StmtVisitor {
     virtual void visitExpressionStmt(ExpressionStmt& stmt) = 0;
@@ -35,6 +36,7 @@ struct StmtVisitor {
     virtual void visitContinueStmt(ContinueStmt& stmt) = 0;
     virtual void visitForInStmt(ForInStmt& stmt) = 0;
     virtual void visitTryStmt(TryStmt& stmt) = 0;
+    virtual void visitSwitchStmt(SwitchStmt& stmt) = 0;
     virtual ~StmtVisitor() = default;
 };
 
@@ -191,4 +193,22 @@ struct TryStmt : Stmt {
     TryStmt(StmtPtr tryBody, Token name, std::optional<Token> infoName, StmtPtr catchBody, StmtPtr finallyBody)
         : tryBody(std::move(tryBody)), name(std::move(name)), infoName(std::move(infoName)), catchBody(std::move(catchBody)), finallyBody(std::move(finallyBody)) {}
     void accept(StmtVisitor& visitor) override { visitor.visitTryStmt(*this); }
+};
+
+// One clause of a switch: `case a, b:` followed by statements, or `default:` followed by statements. `values` is empty for the default clause. The body is a list of statements that runs in its own scope.
+struct SwitchClause {
+    std::vector<ExprPtr> values;
+    std::vector<StmtPtr> body;
+    bool isDefault = false;
+};
+
+// switch (subject) { case a, b: ... case c: ... default: ... }
+// The subject is evaluated once, the case values are compared to it with == in order (each one evaluated only when reached), and only the first matching clause runs: there is no fall-through. `default` must be the last clause and runs when nothing matched. `break` inside leaves the switch; `continue` goes on to the enclosing loop.
+struct SwitchStmt : Stmt {
+    Token keyword; // the "switch" token, for error reporting
+    ExprPtr subject;
+    std::vector<SwitchClause> clauses;
+    SwitchStmt(Token keyword, ExprPtr subject, std::vector<SwitchClause> clauses)
+        : keyword(std::move(keyword)), subject(std::move(subject)), clauses(std::move(clauses)) {}
+    void accept(StmtVisitor& visitor) override { visitor.visitSwitchStmt(*this); }
 };

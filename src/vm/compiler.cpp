@@ -130,7 +130,7 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
     // No endScope() call here
     functionStack.pop_back();
 
-    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE - not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
+    // Unlike a plain value constant (emitConstant()), a function needs OP_CLOSURE — not OP_CONSTANT, followed by one (isLocal, index) byte-pair per upvalue it captures, so the VM knows exactly how to build this specific closure instance at the moment this bytecode runs.
     emitConstantOp(OpCode::OP_CLOSURE, makeConstant(VMValue{function}));
     for (const UpvalueInfo& upvalue : capturedUpvalues) {
         emitByte(upvalue.isLocal ? 1 : 0);
@@ -261,7 +261,7 @@ void Compiler::declareVariable(const Token& name) {
 }
 
 void Compiler::markInitialized() {
-    if (current_().scopeDepth == 0) return; // no-op for globals - nothing to mark
+    if (current_().scopeDepth == 0) return; // no-op for globals — nothing to mark
     current_().locals.back().depth = current_().scopeDepth;
 }
 
@@ -286,12 +286,12 @@ int Compiler::resolveLocal(FunctionState& state, const Token& name) {
                       // relative to this function's OWN call frame
         }
     }
-    return -1; // not a local - caller falls back to treating it as a global
+    return -1; // not a local — caller falls back to treating it as a global
 }
 
 int Compiler::resolveUpvalue(int functionIndex, const Token& name) {
     if (functionIndex == 0) {
-        return -1; // no enclosing function - this IS the top-level script
+        return -1; // no enclosing function — this IS the top-level script
     }
     int enclosingIndex = functionIndex - 1; // functionStack is nested in compile order, so the immediately enclosing function is always right below this one
 
@@ -309,13 +309,13 @@ int Compiler::resolveUpvalue(int functionIndex, const Token& name) {
         return addUpvalue(functionIndex, static_cast<uint8_t>(upvalue), false);
     }
 
-    return -1; // not found anywhere outward either - caller treats it as a global
+    return -1; // not found anywhere outward either — caller treats it as a global
 }
 
 int Compiler::addUpvalue(int functionIndex, uint8_t index, bool isLocal) {
     auto& upvalues = functionStack[functionIndex].upvalues;
 
-    // Reuse an existing capture for the exact same (index, isLocal) pair if this function already captures it - avoids redundant duplicate upvalue slots
+    // Reuse an existing capture for the exact same (index, isLocal) pair if this function already captures it — avoids redundant duplicate upvalue slots
     for (size_t i = 0; i < upvalues.size(); i++) {
         if (upvalues[i].index == index && upvalues[i].isLocal == isLocal) {
             return static_cast<int>(i);
@@ -357,6 +357,8 @@ void Compiler::statement() {
         returnStatement();
     } else if (match(TokenType::IF)) {
         ifStatement();
+    } else if (match(TokenType::SWITCH)) {
+        switchStatement();
     } else if (match(TokenType::WHILE)) {
         whileStatement();
     } else if (match(TokenType::FOR)) {
@@ -437,13 +439,85 @@ void Compiler::ifStatement() {
     // Unconditional jump at the END of the then-branch, to skip past the else-branch entirely
     size_t elseJump = emitJump(OpCode::OP_JUMP);
 
-    patchJump(thenJump); // NOW we know how far to jump if the condition was false - right here
+    patchJump(thenJump); // NOW we know how far to jump if the condition was false — right here
     emitByte(OpCode::OP_POP); // discard the (falsey) condition value before running the else-branch
 
     if (match(TokenType::ELSE)) {
         statement();
     }
     patchJump(elseJump);
+}
+
+// switch (subject) { case a, b: ... default: ... }
+// The subject stays on the stack as a hidden local for the whole switch. Each case value is compared with it in turn (GET_LOCAL, value, EQUAL); a match jumps to that clause's body, a miss goes on to the next test, and when every test of a clause has missed the body is skipped. A body that finishes jumps to the end, so there is no fall-through. `default` is last, so its body is simply what runs when every skip has landed on it.
+void Compiler::switchStatement() {
+    consume(TokenType::LEFT_PAREN, "Expect '(' after 'switch'.");
+    beginScope(); // holds the hidden subject
+    int switchScopeDepth = current_().scopeDepth;
+    expression();
+    consume(TokenType::RIGHT_PAREN, "Expect ')' after switch value.");
+    consume(TokenType::LEFT_BRACE, "Expect '{' before switch body.");
+    current_().locals.push_back(LocalVar{Token(TokenType::IDENTIFIER, " subject", previous().line), switchScopeDepth});
+    size_t subjectIndex = current_().locals.size() - 1; // a local's index in `locals` is its stack slot
+    if (subjectIndex > 255) {
+        errorAt(previous(), "Too many local variables in function.");
+        subjectIndex = 255;
+    }
+    uint8_t subjectSlot = static_cast<uint8_t>(subjectIndex);
+
+    LoopInfo entry{switchScopeDepth, 0, {}, current_().tryDepth};
+    entry.isSwitch = true;
+    current_().loops.push_back(std::move(entry)); // so `break` finds this switch
+    std::vector<size_t> doneJumps;
+    bool sawDefault = false;
+    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+        if (sawDefault && (check(TokenType::CASE) || check(TokenType::DEFAULT))) {
+            errorAt(peek(), "'default' must be the last clause in a switch.");
+        }
+        if (match(TokenType::CASE)) {
+            std::vector<size_t> toBody;
+            do {
+                emitByte(OpCode::OP_GET_LOCAL);
+                emitByte(subjectSlot);
+                expression();
+                emitByte(OpCode::OP_EQUAL);
+                size_t noMatch = emitJump(OpCode::OP_JUMP_IF_FALSE);
+                emitByte(OpCode::OP_POP);                  // matched: discard the comparison result
+                toBody.push_back(emitJump(OpCode::OP_JUMP)); // and go to this clause's body
+                patchJump(noMatch);
+                emitByte(OpCode::OP_POP);                  // missed: discard it and try the next value
+            } while (match(TokenType::COMMA));
+            consume(TokenType::COLON, "Expect ':' after case value.");
+            size_t skipBody = emitJump(OpCode::OP_JUMP); // no value matched: step over the body
+            for (size_t jump : toBody) patchJump(jump);
+            switchClauseBody();
+            doneJumps.push_back(emitJump(OpCode::OP_JUMP));
+            patchJump(skipBody);
+        } else if (match(TokenType::DEFAULT)) {
+            sawDefault = true;
+            consume(TokenType::COLON, "Expect ':' after 'default'.");
+            switchClauseBody();
+        } else {
+            errorAt(peek(), "Expect 'case' or 'default' in switch body.");
+            // skip to the next clause so one stray statement gives one error (and the loop cannot spin)
+            while (!check(TokenType::CASE) && !check(TokenType::DEFAULT) && !check(TokenType::RIGHT_BRACE) && !isAtEnd()) advance();
+        }
+    }
+    consume(TokenType::RIGHT_BRACE, "Expect '}' after switch body.");
+
+    for (size_t jump : doneJumps) patchJump(jump);
+    LoopInfo finished = std::move(current_().loops.back()); // by value: compiling the clauses may have grown functionStack
+    current_().loops.pop_back();
+    for (size_t breakJump : finished.breakJumps) patchJump(breakJump); // `break` has already popped the clause's own locals, so the stack is [.. subject] on every path to here
+    endScope(); // pops the subject
+}
+
+void Compiler::switchClauseBody() {
+    beginScope();
+    while (!check(TokenType::CASE) && !check(TokenType::DEFAULT) && !check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
+        declaration();
+    }
+    endScope();
 }
 
 void Compiler::whileStatement() {
@@ -538,7 +612,7 @@ void Compiler::forStatement() {
         return;
     }
 
-    // "for (init; cond; incr) body" - compiled directly to the equivalent jump/loop bytecode
+    // "for (init; cond; incr) body" — compiled directly to the equivalent jump/loop bytecode
     beginScope(); // so a "var i" in the init-clause is scoped to the loop, matching the tree-walker
 
     consume(TokenType::LEFT_PAREN, "Expect '(' after 'for'.");
@@ -571,13 +645,13 @@ void Compiler::forStatement() {
         size_t incrementStart = currentChunk().code.size();
 
         statementExpression(TokenType::RIGHT_PAREN); // the increment expression, e.g. "i = i + 1" or "i++"
-        emitByte(OpCode::OP_POP); // it's a bare expression - discard its unused result
+        emitByte(OpCode::OP_POP); // it's a bare expression — discard its unused result
 
         consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
 
         emitLoop(loopStart);      // after the increment, jump back to re-check the condition
         loopStart = incrementStart; // the BODY's end should now loop back to the increment, not the condition
-        patchJump(bodyJump);      // the jump we emitted above lands here - right before the body
+        patchJump(bodyJump);      // the jump we emitted above lands here — right before the body
     } else {
         consume(TokenType::RIGHT_PAREN, "Expect ')' after for clauses.");
     }
@@ -778,7 +852,7 @@ void Compiler::binary(bool) {
 void Compiler::and_(bool) {
     // Short-circuit: if the left operand (already on the stack) is falsey, skip evaluating the right operand entirely and leave the falsey left value as the whole expression's result
     size_t endJump = emitJump(OpCode::OP_JUMP_IF_FALSE);
-    emitByte(OpCode::OP_POP); // left was truthy - discard it, result becomes whatever the right side is
+    emitByte(OpCode::OP_POP); // left was truthy — discard it, result becomes whatever the right side is
     parsePrecedence(Precedence::AND);
     patchJump(endJump);
 }
@@ -1122,7 +1196,8 @@ void Compiler::errorAt(const Token& token, const std::string& message) {
 // bytecode emission
 
 int Compiler::currentLine() const {
-    // previous() is the token most recently consumed - attributing emitted bytecode to it gives reasonable line numbers for errors.
+    // previous() is the token most recently consumed — attributing
+    // emitted bytecode to it gives reasonable line numbers for errors.
     return current > 0 ? tokens[current - 1].line : 0;
 }
 
@@ -1349,7 +1424,7 @@ void Compiler::breakStatement() {
     Token keyword = previous();
     consume(TokenType::SEMICOLON, "Expect ';' after 'break'.");
     if (current_().loops.empty()) {
-        errorAt(keyword, "Can't use 'break' outside of a loop.");
+        errorAt(keyword, "Can't use 'break' outside of a loop or switch.");
         return;
     }
     emitExit(current_().loops.back().scopeDepth, current_().loops.back().tryDepth, ExitMode::JUMP);
@@ -1360,12 +1435,20 @@ void Compiler::breakStatement() {
 void Compiler::continueStatement() {
     Token keyword = previous();
     consume(TokenType::SEMICOLON, "Expect ';' after 'continue'.");
-    if (current_().loops.empty()) {
+    // `continue` belongs to the innermost LOOP: a switch in between is skipped over (and exited, popping its subject).
+    const LoopInfo* target = nullptr;
+    for (size_t i = current_().loops.size(); i-- > 0;) {
+        if (!current_().loops[i].isSwitch) {
+            target = &current_().loops[i];
+            break;
+        }
+    }
+    if (!target) {
         errorAt(keyword, "Can't use 'continue' outside of a loop.");
         return;
     }
-    emitExit(current_().loops.back().scopeDepth, current_().loops.back().tryDepth, ExitMode::JUMP);
-    emitLoop(current_().loops.back().continueTarget);
+    emitExit(target->scopeDepth, target->tryDepth, ExitMode::JUMP);
+    emitLoop(target->continueTarget);
 }
 
 size_t Compiler::emitJump(OpCode jumpOp) {
