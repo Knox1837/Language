@@ -229,6 +229,7 @@ void ASTPrinter::visitFunctionStmt(FunctionStmt& stmt) {
     out << "(def " << stmt.name.lexeme << " (";
     for (size_t i = 0; i < stmt.params.size(); i++) {
         if (i > 0) out << " ";
+        if (stmt.hasRest && static_cast<int>(i) == stmt.fixedCount()) out << "...";
         out << stmt.params[i].lexeme;
         if (stmt.defaults[i]) out << "=" << print(*stmt.defaults[i]);
     }

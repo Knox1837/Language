@@ -76,7 +76,15 @@ void Lexer::scanToken() {
         case ']': addToken(TokenType::RIGHT_BRACKET); break;
         case ',': addToken(TokenType::COMMA); break;
         case ':': addToken(TokenType::COLON); break;
-        case '.': addToken(TokenType::DOT); break;
+        case '.':
+            if (peek() == '.' && peekNext() == '.') { // "..." marks a rest parameter: def f(a, ...rest)
+                advance();
+                advance();
+                addToken(TokenType::ELLIPSIS);
+            } else {
+                addToken(TokenType::DOT);
+            }
+            break;
         case '-': addToken(match('-') ? TokenType::MINUS_MINUS : match('=') ? TokenType::MINUS_EQUAL : TokenType::MINUS); break;
         case '+': addToken(match('+') ? TokenType::PLUS_PLUS : match('=') ? TokenType::PLUS_EQUAL : TokenType::PLUS); break;
         case '?': addToken(TokenType::QUESTION); break;

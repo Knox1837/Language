@@ -101,16 +101,20 @@ struct WhileStmt : Stmt {
 
 // def name(param1, param2 = default) { body }
 // `defaults` is as long as `params`: defaults[i] is the expression for params[i], or nullptr for a required parameter. Required parameters always come first, so the first `requiredCount()` entries are nullptr and the rest are not.
+// With `hasRest`, the LAST entry of `params` is the rest parameter (def f(a, ...rest)): it has no default, takes no argument of its own, and receives an array of every argument beyond the others.
 struct FunctionStmt : Stmt {
     Token name;
     std::vector<Token> params;
     std::vector<ExprPtr> defaults;
+    bool hasRest;
     std::vector<StmtPtr> body;
-    FunctionStmt(Token name, std::vector<Token> params, std::vector<ExprPtr> defaults, std::vector<StmtPtr> body)
-        : name(std::move(name)), params(std::move(params)), defaults(std::move(defaults)), body(std::move(body)) {}
+    FunctionStmt(Token name, std::vector<Token> params, std::vector<ExprPtr> defaults, bool hasRest, std::vector<StmtPtr> body)
+        : name(std::move(name)), params(std::move(params)), defaults(std::move(defaults)), hasRest(hasRest), body(std::move(body)) {}
+    // How many parameters take an argument of their own (all of them, except the rest parameter).
+    int fixedCount() const { return static_cast<int>(params.size()) - (hasRest ? 1 : 0); }
     int requiredCount() const {
         int required = 0;
-        while (required < static_cast<int>(defaults.size()) && !defaults[required]) required++;
+        while (required < fixedCount() && !defaults[required]) required++;
         return required;
     }
     void accept(StmtVisitor& visitor) override { visitor.visitFunctionStmt(*this); }

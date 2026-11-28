@@ -25,11 +25,17 @@ namespace {
 VM* activeVM = nullptr;
 
 // "Expected 2 arguments but got 1.", or for a native with optional arguments, "Expected 1 or 2 arguments but got 3."
+constexpr int kUnlimitedArity = 1 << 30; // the maxArity of a function with a rest parameter
+
 std::string arityMessage(int minArity, int maxArity, int got) {
     std::ostringstream msg;
-    msg << "Expected " << minArity;
-    if (maxArity == minArity + 1) msg << " or " << maxArity;
-    else if (maxArity > minArity + 1) msg << " to " << maxArity;
+    msg << "Expected ";
+    if (maxArity >= kUnlimitedArity) msg << "at least " << minArity;
+    else {
+        msg << minArity;
+        if (maxArity == minArity + 1) msg << " or " << maxArity;
+        else if (maxArity > minArity + 1) msg << " to " << maxArity;
+    }
     msg << " arguments but got " << got << ".";
     return msg.str();
 }
@@ -337,16 +343,29 @@ bool VM::callFunction(const VMValue& callee, const std::vector<VMValue>& args, V
 }
 
 bool VM::call(std::shared_ptr<VMClosure> closure, int argCount) {
-    if (argCount < closure->function->minArity || argCount > closure->function->arity) {
-        runtimeError(arityMessage(closure->function->minArity, closure->function->arity, argCount));
+    const VMFunction& function = *closure->function;
+    if (argCount < function.minArity || (!function.hasRest && argCount > function.arity)) {
+        runtimeError(arityMessage(function.minArity, function.hasRest ? kUnlimitedArity : function.arity, argCount));
         return false;
     }
 
-    // Arguments left out (they have defaults) get a nil placeholder so every parameter has its stack slot. The function's first instructions replace the placeholder with the default value (see OP_JUMP_IF_ARG), using `argCount` below to tell which ones were really passed.
-    for (int missing = argCount; missing < closure->function->arity; missing++) push(VMValue{});
+    if (function.hasRest && argCount > function.arity) {
+        // The extra arguments are the top (argCount - arity) values on the stack: move them into one array and drop their slots, so the stack holds exactly the fixed arguments.
+        auto rest = std::make_shared<VMArray>();
+        auto first = stack.end() - static_cast<std::ptrdiff_t>(argCount - function.arity);
+        rest->elements.assign(std::make_move_iterator(first), std::make_move_iterator(stack.end()));
+        stack.erase(first, stack.end());
+        argCount = function.arity; // (the frame's argCount below only has to say how many FIXED parameters were passed)
+        push(VMValue{rest});
+    } else {
+        // Arguments left out (they have defaults) get a nil placeholder so every parameter has its stack slot. The function's first instructions replace the placeholder with the default value (see OP_JUMP_IF_ARG), using `argCount` below to tell which ones were really passed.
+        for (int missing = argCount; missing < function.arity; missing++) push(VMValue{});
+        if (function.hasRest) push(VMValue{std::make_shared<VMArray>()}); // no extras: the rest parameter is an empty array
+    }
 
     // stackBase points AT the callee value itself (slot 0), with arguments starting at slot 1. this matches the compiler reserving local slot 0 for the callee in EVERY function
-    CallFrame frame{closure, 0, stack.size() - closure->function->arity - 1, nullptr};
+    const size_t slots = static_cast<size_t>(function.arity) + (function.hasRest ? 1 : 0); // the fixed parameters, then the rest array
+    CallFrame frame{closure, 0, stack.size() - slots - 1, nullptr};
     frame.argCount = argCount;
     frames.push_back(std::move(frame));
     return true;

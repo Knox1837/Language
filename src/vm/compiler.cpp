@@ -86,6 +86,16 @@ void Compiler::functionBody(const std::string& name, FunctionType type, const st
     bool sawDefault = false;
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
+            if (match(TokenType::ELLIPSIS)) {
+                // A rest parameter: one more local, right after the fixed parameters, that the VM fills with an array of the extra arguments (see VM::call). It has no default and must be last. `arity` counts only the fixed parameters.
+                function->hasRest = true;
+                consume(TokenType::IDENTIFIER, "Expect parameter name after '...'.");
+                Token restName = previous();
+                declareVariable(restName);
+                markInitialized();
+                if (check(TokenType::COMMA)) errorAt(peek(), "A rest parameter must be the last parameter.");
+                continue; // on to the `while (match(COMMA))` test
+            }
             function->arity++;
             if (function->arity > 255) {
                 errorAt(peek(), "Can't have more than 255 parameters.");

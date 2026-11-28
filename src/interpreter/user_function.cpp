@@ -4,6 +4,7 @@
 #include "interpreter.h"
 #include "return_exception.h"
 #include "lox_instance.h"
+#include "array_object.h"
 #include "call_stack.h"
 #include "../util/trace.h"
 
@@ -15,11 +16,11 @@ int UserFunction::arity() const {
 }
 
 int UserFunction::maxArity() const {
-    return static_cast<int>(declaration->params.size());
+    return declaration->hasRest ? kUnlimitedArity : static_cast<int>(declaration->params.size());
 }
 
 std::shared_ptr<UserFunction> UserFunction::bind(std::shared_ptr<LoxInstance> instance) {
-    // A fresh scope, one level above the method's own parameter scope, chained to the ORIGINAL closure so the method still sees whatever it could already see (e.g. globals) - with `this` added on top.
+    // A fresh scope, one level above the method's own parameter scope, chained to the ORIGINAL closure so the method still sees whatever it could already see (e.g. globals) — with `this` added on top.
     auto env = std::make_shared<Environment>(closure);
     env->define("this", Value{instance});
     return std::make_shared<UserFunction>(declaration, env, isInitializer);
@@ -41,7 +42,8 @@ Value UserFunction::run(Interpreter& interpreter, std::vector<Value>& arguments)
     auto callEnv = std::make_shared<Environment>(closure);
 
     // A parameter whose argument was left out gets its default, evaluated now, in this call's own scope: it can use the parameters before it (and anything the function can see), and each call gets a fresh value (a default of [] is a new array every time).
-    for (size_t i = 0; i < declaration->params.size(); i++) {
+    const size_t fixed = static_cast<size_t>(declaration->fixedCount());
+    for (size_t i = 0; i < fixed; i++) {
         if (i < arguments.size()) {
             callEnv->define(declaration->params[i].lexeme, arguments[i]);
         } else {
@@ -49,6 +51,12 @@ Value UserFunction::run(Interpreter& interpreter, std::vector<Value>& arguments)
             Value fallback = declaration->defaults[i] ? interpreter.evaluateIn(*declaration->defaults[i], callEnv) : Value{std::monostate{}};
             callEnv->define(declaration->params[i].lexeme, fallback);
         }
+    }
+    if (declaration->hasRest) {
+        // The rest parameter gets every argument beyond the fixed ones, in a new array (empty when there are none).
+        auto rest = std::make_shared<ArrayObject>();
+        for (size_t i = fixed; i < arguments.size(); i++) rest->elements.push_back(arguments[i]);
+        callEnv->define(declaration->params[fixed].lexeme, Value{rest});
     }
 
     if (isInitializer) {

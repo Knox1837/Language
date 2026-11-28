@@ -7,7 +7,7 @@
 // function    -> IDENTIFIER "(" parameters? ")" block   (a method — no "def" keyword)
 // funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 // parameters  -> parameter ( "," parameter )*      (a parameter with a default may only be followed by parameters with defaults)
-// parameter   -> IDENTIFIER ( "=" expression )?
+// parameter   -> IDENTIFIER ( "=" expression )? | "..." IDENTIFIER      (the "..." rest parameter must be last and has no default)
 // varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 // statement   -> exprStmt | printStmt | ifStmt | whileStmt | returnStmt | block
 // switchStmt  -> "switch" "(" expression ")" "{" clause* "}"
@@ -118,10 +118,19 @@ std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string
     std::vector<Token> params;
     std::vector<ExprPtr> defaults;
     bool sawDefault = false;
+    bool hasRest = false;
     if (!check(TokenType::RIGHT_PAREN)) {
         do {
             if (params.size() >= 255) {
                 error(peek(), "Can't have more than 255 parameters.");
+            }
+            if (match({TokenType::ELLIPSIS})) {
+                // A rest parameter: it gets an array of the extra arguments. It has no default and must be last.
+                hasRest = true;
+                params.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name after '...'."));
+                defaults.push_back(nullptr);
+                if (check(TokenType::COMMA)) error(peek(), "A rest parameter must be the last parameter."); // reported, not thrown, so the rest of the list still parses
+                continue; // on to the `while (match(COMMA))` test
             }
             params.push_back(consume(TokenType::IDENTIFIER, "Expect parameter name."));
             if (match({TokenType::EQUAL})) {
@@ -141,7 +150,7 @@ std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string
     DepthGuard inFunction(functionDepth, functionDepth + 1); // `return` is legal from here to the closing brace
     std::vector<StmtPtr> body = block();
 
-    return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(defaults), std::move(body));
+    return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(defaults), hasRest, std::move(body));
 }
 
 StmtPtr Parser::functionDeclaration() {
