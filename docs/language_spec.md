@@ -185,7 +185,7 @@ method      -> IDENTIFIER "(" parameters? ")" block
 funDecl     -> "def" IDENTIFIER "(" parameters? ")" block
 funExpr     -> "def" "(" parameters? ")" block
 parameters  -> parameter ( "," parameter )*
-parameter   -> IDENTIFIER ( "=" expression )?
+parameter   -> IDENTIFIER ( "=" expression )? | "..." IDENTIFIER
 varDecl     -> "var" IDENTIFIER ( "=" expression )? ";"
 statement   -> exprStmt | printStmt | ifStmt | switchStmt | whileStmt | forStmt | returnStmt
              | breakStmt | continueStmt | tryStmt | block
@@ -490,6 +490,46 @@ print greet("Ada", "Hi");      // Hi, Ada
 - **Callbacks:** `map`, `filter`, `reduce` and `sort` still pass the same
   number of arguments, so a callback with defaults works as long as that number
   is within its range: `map(xs, def(v, scale = 10) { return v * scale; })`.
+
+## Variable-length parameters
+
+A function can take any number of extra arguments with a **rest parameter**:
+the last parameter, written `...name`. It receives an array of every argument
+beyond the ones before it.
+
+```
+def log(label, ...parts) {
+    print label + ": " + str(length(parts));
+}
+log("none");            // none: 0
+log("two", 1, 2);       // two: 2
+
+def sum(...nums) {
+    var total = 0;
+    for (var n in nums) total = total + n;
+    return total;
+}
+print sum();            // 0
+print sum(1, 2, 3, 4);  // 10
+```
+
+- **The rest parameter is always an array,** empty when there are no extra
+  arguments. It is a normal array (you can `push` to it, index it, loop over
+  it), and each call gets a new one.
+- **It must be the last parameter and has no default:** `def f(...a, b)` is the
+  syntax error `A rest parameter must be the last parameter.` Only one is
+  allowed. Parameters with defaults may come before it:
+  `def f(a, b = 2, ...rest)`.
+- **Argument counts have no upper limit.** The minimum is the number of
+  required parameters, so `def f(a, ...rest)` called with no arguments is
+  `Expected at least 1 arguments but got 0.` A function with only a rest
+  parameter accepts any number of arguments, including none.
+- **It works everywhere a function does:** methods, `init()` and function
+  expressions (`def(a, ...r) { ... }`), and as a callback: `map`, `filter`,
+  `reduce` and `sort` pass their usual number of arguments, so extra
+  parameters of the callback are simply empty.
+- **There is no spread call yet:** `f(...items)` is a syntax error, so an
+  array cannot be passed on as separate arguments.
 
 ## Function expressions
 

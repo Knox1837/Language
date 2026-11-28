@@ -1739,3 +1739,33 @@ count) and the compiler checks `FunctionType::SCRIPT`.
   skipped. The compiler still compiles the returned expression (and pops it) so
   one mistake gives one error.
 - **Scripts that ended early with `return`** now need `exit()`.
+
+## Design note: rest parameters
+
+`def f(a, b = 2, ...rest)`: the last parameter, marked with the new `...`
+token (`ELLIPSIS`, lexed as three dots; a single `.` is still `DOT`), receives
+an array of the extra arguments. It has no default and must come last.
+
+- **Parser / tree-walker.** `FunctionStmt` gets `hasRest`; the rest parameter
+  is the last entry of `params` (with a `nullptr` default). `fixedCount()` is
+  every parameter but the rest one, and `requiredCount()` counts only the fixed
+  ones, so `arity()` is the required count and `maxArity()` is the new
+  `kUnlimitedArity` (`1 << 30`, in `callable.h`) when there is a rest parameter.
+  The existing range checks in the call expression and `array_callbacks.h`
+  needed no change. `UserFunction::run` binds the fixed parameters (defaults
+  as before), then builds a new `ArrayObject` from `arguments[fixed..]`.
+- **Error message.** With no upper limit, `arityMessage` says
+  `Expected at least N arguments but got M.` (both engines; the VM has its own
+  copy in `vm.cpp`).
+- **VM.** `VMFunction::hasRest` is set by the compiler; `arity` still counts
+  only the fixed parameters, and the rest array is one more local declared right
+  after them (slot `arity + 1`). `VM::call` moves the top `argCount - arity`
+  stack values into a new `VMArray` and erases their slots (the same move
+  `OP_ARRAY` does), then pushes the array, so the callee sees exactly
+  `arity + 1` argument slots; with no extras it pushes an empty array, after the
+  usual nil padding for omitted default parameters. `CallFrame::argCount` is
+  clamped to `arity` in that case, so `OP_JUMP_IF_ARG` for the defaults is
+  unaffected. No new opcode.
+- **Not done.** A spread call `f(...items)` would need a new call form (and, in
+  the VM, an opcode that pushes an array's elements as arguments). The parser
+  rejects the `...` there with `Expect expression.`
