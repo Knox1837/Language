@@ -392,6 +392,16 @@ void Compiler::printStatement() {
 }
 
 void Compiler::returnStatement() {
+    if (current_().type == FunctionType::SCRIPT) {
+        // The top level of a file (or a REPL line) is not a function. Report it, but still consume the value and the ';' so one mistake gives one error.
+        errorAt(previous(), "Can't return from top-level code.");
+        if (!match(TokenType::SEMICOLON)) {
+            expression();
+            consume(TokenType::SEMICOLON, "Expect ';' after return value.");
+            emitByte(OpCode::OP_POP);
+        }
+        return;
+    }
     if (current_().type == FunctionType::INITIALIZER) {
         // Like the tree-walker, an initializer's return value is ignored: it always returns `this`. A returned expression is still EVALUATED (for its side effects) and then discarded.
         if (!match(TokenType::SEMICOLON)) {

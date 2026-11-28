@@ -138,6 +138,7 @@ std::unique_ptr<FunctionStmt> Parser::functionRest(Token name, const std::string
     consume(TokenType::LEFT_BRACE, "Expect '{' before " + kind + " body.");
     DepthGuard noLoop(loopDepth, 0); // a loop outside this function does not make `break` legal inside it
     DepthGuard noSwitch(switchDepth, 0); // nor does a switch
+    DepthGuard inFunction(functionDepth, functionDepth + 1); // `return` is legal from here to the closing brace
     std::vector<StmtPtr> body = block();
 
     return std::make_unique<FunctionStmt>(std::move(name), std::move(params), std::move(defaults), std::move(body));
@@ -358,6 +359,11 @@ StmtPtr Parser::returnStatement() {
         value = expression();
     }
     consume(TokenType::SEMICOLON, "Expect ';' after return value.");
+    if (functionDepth == 0) {
+        // Reported but NOT thrown, like `break` outside a loop. The tree-walker still runs the rest of a file that had a syntax error, and a ReturnStmt executed outside any function would escape as an uncaught exception and abort the process, so an empty block takes its place.
+        error(keyword, "Can't return from top-level code.");
+        return std::make_unique<BlockStmt>(std::vector<StmtPtr>{});
+    }
     return std::make_unique<ReturnStmt>(std::move(keyword), std::move(value));
 }
 

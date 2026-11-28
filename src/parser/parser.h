@@ -23,6 +23,7 @@ private:
     std::vector<Token> tokens;
     std::string sourceDir;
     int current = 0;
+    int functionDepth = 0; // how many function bodies enclose the current position: `return` is only legal inside one
     int switchDepth = 0; // how many switch bodies enclose the current position inside the current function: `break` is legal inside one even with no loop around it, `continue` is not
     int loopDepth = 0; // how many loop BODIES enclose the current position inside the current function; 0 means `break`/`continue` are not allowed here
 

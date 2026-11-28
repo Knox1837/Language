@@ -1717,3 +1717,25 @@ clause is "match, run its body, leave", and `break` is only an early exit.
 - **New reserved words.** `switch`, `case` and `default` are keywords now, so
   a program that used one of them as a variable or function name no longer
   parses.
+
+## Design note: `return` outside a function
+
+A top-level `return` is a syntax error in both frontends:
+`Can't return from top-level code.` The parser keeps a `functionDepth`
+(raised in `functionRest`, so functions, methods and function expressions all
+count) and the compiler checks `FunctionType::SCRIPT`.
+
+- **Why it matters.** The tree-walker implements `return` by throwing
+  `ReturnException`, which only `UserFunction::run` catches. A `return`
+  executed outside any function escaped to `main` and aborted the process
+  (exit 134). The VM instead treated it as the end of the script, so the two
+  engines disagreed. A syntax error inside a class body could also leave a
+  `return` outside its method (error recovery skips to the next statement), and
+  because the tree-walker runs the rest of a file after a syntax error, that
+  crashed too.
+- **Recovery.** The parser reports the error without throwing and returns an
+  empty block in place of the statement, as it does for a stray `break`, so a
+  surrounding `if` or loop body is never null and the rest of the file is not
+  skipped. The compiler still compiles the returned expression (and pops it) so
+  one mistake gives one error.
+- **Scripts that ended early with `return`** now need `exit()`.

@@ -432,6 +432,11 @@ print add(2, 3);   // 5
 
 - No return type annotation — return type is whatever the returned
   value's runtime type is (or `nil` if no `return` is hit).
+- `return` is only allowed inside a function or method. At the top level of a
+  file it is a syntax error: `Can't return from top-level code.` (The VM
+  refuses to run the program; the tree-walking interpreter reports the error
+  and runs the rest, as for any syntax error.) To stop a script early, use
+  `exit()`.
 - Recursion works normally.
 - Functions are values: they can be stored in variables, passed as
   arguments, and returned from other functions.
